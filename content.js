@@ -1,9 +1,12 @@
 /**
- * Content Script — Nafer Shield v3.2
- * FIXES:
- *   - Removed Google/YouTube infrastructure domains (was breaking YouTube)
- *   - Removed script.remove() (too destructive, DNR handles this at network level)
- *   - Added PROTECTION_TOGGLED listener to remove CSS when user disables extension
+ * Content Script — Entry Point
+ * Nafer Shield Extension
+ * Runs at document_start in every frame.
+ *
+ * Fix 4 applied: MutationObserver now watches for new ad nodes injected by
+ * SPAs (YouTube, Reddit etc.) and re-applies cosmetic CSS on demand.
+ * The observer uses subtree:true so nested mutations are caught.
+ * A 200ms debounce prevents thrashing on rapid DOM updates.
  */
 
 (function () {
@@ -12,152 +15,71 @@
   const _api = globalThis.chrome ?? globalThis.browser;
   if (!_api?.runtime) return;
 
-  // ─── Sites where we skip aggressive scanning ────────────────────────────────
-  // These sites use Google infrastructure domains legitimately.
-  // DNR rules (EasyList) already handle ad blocking there at network level.
-  const SAFE_HOSTS = [
-    'youtube.com', 'www.youtube.com', 'm.youtube.com',
-    'google.com', 'www.google.com',
-    'mail.google.com', 'drive.google.com',
-    'gmail.com',
-  ];
-  const hostname    = location.hostname;
-  const isSafeHost  = SAFE_HOSTS.some(h => hostname === h || hostname.endsWith('.' + h));
+  const hostname = location.hostname;
+  if (!hostname) return;
 
-  // ─── Ad Network Domains ────────────────────────────────────────────────────
-  // NOTE: Google/YouTube infrastructure deliberately excluded.
-  // They are blocked at network level by EasyList (DNR static rules).
-  // Blocking them here destroys YouTube's UI.
-  const AD_DOMAINS = [
-    'exoclick.com', 'trafficjunky.com', 'trafficjunky.net',
-    'juicyads.com',  'juicyads.net',    'adnium.com',
-    'propellerads.com', 'popcash.net',  'popads.net',
-    'hilltopads.com',   'hilltopads.net', 'ero-advertising.com',
-    'trafficstars.com', 'plugrush.com', 'adspyglass.com',
-    'revcontent.com',   'mgid.com',     'onclickmax.com',
-    'clickadu.com',     'adskeeper.com','adf.ly',
-    'linkbucks.com',    'coinhive.com', 'coin-hive.com',
-    'taboola.com',      'outbrain.com', 'natpal.com',
-    'cpx.to',           'popcash.net',
-  ];
+  // ─── Cosmetic CSS Injection ───────────────────────────────────────────────────
+  let _injectedCSS = '';
 
-  const AD_REGEX = new RegExp(
-    AD_DOMAINS.map(d => d.replace(/\./g, '\\.')).join('|'), 'i'
-  );
-
-  function isAdUrl(url) {
-    try { return !!(url && AD_REGEX.test(url)); } catch { return false; }
+  function injectCSS(css) {
+    if (!css) return;
+    _injectedCSS = css;
+    let style = document.getElementById('nafer-cosmetic');
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'nafer-cosmetic';
+      style.setAttribute('data-nafer', '1');
+      (document.head ?? document.documentElement).appendChild(style);
+    }
+    // Update content (idempotent if css hasn't changed)
+    if (style.textContent !== css) {
+      style.textContent = css;
+    }
   }
 
-  // ─── Popup Guard ───────────────────────────────────────────────────────────
-  const _origOpen = window.open.bind(window);
-  window.open = function (url, ...args) {
-    if (isAdUrl(url)) { console.debug('[Nafer] Blocked popup:', url); return null; }
-    return _origOpen(url, ...args);
-  };
-
-  // ─── CSS Injection ─────────────────────────────────────────────────────────
-  let _styleEl = null;
-
-  function getStyleEl() {
-    if (_styleEl?.isConnected) return _styleEl;
-    _styleEl = document.createElement('style');
-    _styleEl.id = 'nafer-cosmetic';
-    (document.head ?? document.documentElement).prepend(_styleEl);
-    return _styleEl;
-  }
-
-  function applyCSS(css) {
-    const el = getStyleEl();
-    if (el.textContent !== css) el.textContent = css;
-  }
-
-  function removeCSS() {
-    if (_styleEl) { _styleEl.remove(); _styleEl = null; }
-  }
-
-  function fetchCosmetics() {
+  function applyCosmetics() {
+    if (_injectedCSS) {
+      // Already have CSS — just re-inject the style node if it was removed
+      injectCSS(_injectedCSS);
+      return;
+    }
     _api.runtime.sendMessage(
       { type: 'GET_COSMETIC_CSS', payload: { hostname } },
-      (res) => { if (!_api.runtime.lastError && res?.css) applyCSS(res.css); }
+      (response) => {
+        if (_api.runtime.lastError) return;
+        if (response?.css) injectCSS(response.css);
+      }
     );
   }
 
-  // ─── Protection Toggle Listener ─────────────────────────────────────────────
-  // When user disables protection, remove injected CSS from this tab immediately.
-  _api.runtime.onMessage.addListener((msg) => {
-    if (msg?.type === 'PROTECTION_TOGGLED') {
-      if (msg.enabled) {
-        fetchCosmetics(); // re-apply
-      } else {
-        removeCSS();      // remove CSS so ads can show (protection is off)
-      }
-    }
+  // Initial injection
+  applyCosmetics();
+
+  // ─── MutationObserver — Fix 4 ─────────────────────────────────────────────────
+  // SPAs (YouTube, Reddit, Twitter) inject new ad containers after page load.
+  // We watch for any new nodes and re-apply cosmetics with a 200ms debounce
+  // to avoid performance issues during rapid DOM updates.
+  let _debounceTimer = null;
+
+  const observer = new MutationObserver((mutations) => {
+    // Only act if new nodes were added (not just attribute changes)
+    const hasNewNodes = mutations.some(m => m.addedNodes.length > 0);
+    if (!hasNewNodes) return;
+
+    clearTimeout(_debounceTimer);
+    _debounceTimer = setTimeout(applyCosmetics, 200);
   });
 
-  // ─── Element Guards ────────────────────────────────────────────────────────
-  function guardImg(el) {
-    const src = el.src || el.dataset?.src || el.getAttribute('data-lazy-src') || '';
-    if (!src || !isAdUrl(src)) return;
-    el.style.cssText = 'display:none!important;visibility:hidden!important;width:0!important;height:0!important;';
-    el.removeAttribute('src');
-    el.removeAttribute('data-src');
-    console.debug('[Nafer] Blocked img:', src.slice(0, 60));
-  }
-
-  function guardIframe(el) {
-    const src = el.src || el.getAttribute('src') || '';
-    if (!src || !isAdUrl(src)) return;
-    el.style.cssText = 'display:none!important;';
-    el.setAttribute('src', 'about:blank');
-    console.debug('[Nafer] Blocked iframe:', src.slice(0, 60));
-  }
-
-  function scanElement(node) {
-    if (!(node instanceof Element)) return;
-    const tag = node.tagName;
-    // NOTE: No script.remove() — DNR handles script blocking safely at network level
-    if (tag === 'IMG')    { guardImg(node);    return; }
-    if (tag === 'IFRAME') { guardIframe(node); return; }
-    node.querySelectorAll('img').forEach(guardImg);
-    node.querySelectorAll('iframe').forEach(guardIframe);
-  }
-
-  // ─── Start ─────────────────────────────────────────────────────────────────
-  function start() {
-    // Fetch cosmetic CSS first
-    fetchCosmetics();
-
-    // Skip aggressive element scanning on safe hosts (YouTube, Google)
-    if (isSafeHost) return;
-
-    // Scan existing DOM
-    scanElement(document.documentElement);
-
-    // Watch for dynamic injections (SPAs)
-    let _debounce = null;
-    const _queue  = [];
-
-    new MutationObserver((mutations) => {
-      let hasNew = false;
-      for (const m of mutations) {
-        for (const node of m.addedNodes) {
-          if (node.nodeType === 1) { _queue.push(node); hasNew = true; }
-        }
-      }
-      if (!hasNew) return;
-      clearTimeout(_debounce);
-      _debounce = setTimeout(() => {
-        _queue.splice(0).forEach(scanElement);
-        fetchCosmetics();
-      }, 150);
-    }).observe(document.documentElement, { childList: true, subtree: true });
+  function startObserving() {
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,   // catch deeply nested ad injections
+    });
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', start, { once: true });
+    document.addEventListener('DOMContentLoaded', startObserving, { once: true });
   } else {
-    start();
+    startObserving();
   }
-
 })();

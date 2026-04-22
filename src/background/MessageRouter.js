@@ -8,14 +8,12 @@ export class MessageRouter {
    *   engine: import('../core/FilterEngine.js').FilterEngine,
    *   statsService: import('../application/services/StatsService.js').StatsService,
    *   filterListService: import('../application/services/FilterListService.js').FilterListService,
-   *   onEnabledChanged?: () => Promise<void>,
    * }} deps
    */
-  constructor({ engine, statsService, filterListService, onEnabledChanged }) {
-    this._engine           = engine;
-    this._stats            = statsService;
-    this._lists            = filterListService;
-    this._onEnabledChanged = onEnabledChanged ?? (() => Promise.resolve());
+  constructor({ engine, statsService, filterListService }) {
+    this._engine = engine;
+    this._stats = statsService;
+    this._lists = filterListService;
   }
 
   /**
@@ -41,8 +39,6 @@ export class MessageRouter {
 
       case 'SET_ENABLED': {
         await this._engine.setEnabled(payload.enabled);
-        // Re-sync DNR rulesets immediately — this is what actually starts/stops blocking
-        await this._onEnabledChanged();
         return { ok: true };
       }
 
