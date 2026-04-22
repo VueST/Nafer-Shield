@@ -25,5 +25,8 @@ Developed and maintained by **gtqn**.
 3. Build the project: `npm run build`
 4. Load the `dist` folder into Chrome as an unpacked extension.
 
+## 📜 License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
 ---
 © 2026 Nafer Platform. All rights reserved.

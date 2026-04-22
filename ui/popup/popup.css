@@ -51,9 +51,10 @@ body {
   gap: 10px;
 }
 
-.header__icon {
+.header__icon-img {
   width: 24px;
   height: 24px;
+  object-fit: contain;
 }
 
 .header__title {
