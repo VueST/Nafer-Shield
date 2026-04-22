@@ -605,8 +605,8 @@ var router = new MessageRouter({
 var MANIFEST_RULESETS = ["nafer-base", "easylist-1", "easylist-2"];
 async function syncDNRState() {
   try {
-    const isEnabled = await engine.isEnabled();
-    if (isEnabled) {
+    const isEnabled2 = await engine.isEnabled();
+    if (isEnabled2) {
       const allLists = await filterLists.getAll();
       const toEnable = [];
       for (const list of allLists) {
@@ -635,6 +635,19 @@ async function syncDNRState() {
     }
   } catch (err) {
     console.error("[Nafer] syncDNRState error:", err.message);
+  }
+  broadcastToTabs(isEnabled);
+}
+async function broadcastToTabs(enabled) {
+  try {
+    const tabs = await _api5.tabs.query({});
+    for (const tab of tabs) {
+      if (!tab.id || tab.id < 0)
+        continue;
+      _api5.tabs.sendMessage(tab.id, { type: "PROTECTION_TOGGLED", enabled }).catch(() => {
+      });
+    }
+  } catch {
   }
 }
 async function initialize() {
@@ -672,8 +685,8 @@ _api5.alarms?.onAlarm?.addListener(async (alarm) => {
     return;
   }
   if (alarm.name === "nafer-health-check") {
-    const isEnabled = await engine.isEnabled();
-    if (!isEnabled)
+    const isEnabled2 = await engine.isEnabled();
+    if (!isEnabled2)
       return;
     await health.runCheck(
       MANIFEST_RULESETS,

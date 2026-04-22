@@ -66,7 +66,23 @@ async function syncDNRState() {
   } catch (err) {
     console.error('[Nafer] syncDNRState error:', err.message);
   }
+
+  // Notify all open tabs so content scripts react immediately
+  broadcastToTabs(isEnabled);
 }
+
+// Tell every tab's content script about the new protection state
+async function broadcastToTabs(enabled) {
+  try {
+    const tabs = await _api.tabs.query({});
+    for (const tab of tabs) {
+      if (!tab.id || tab.id < 0) continue;
+      _api.tabs.sendMessage(tab.id, { type: 'PROTECTION_TOGGLED', enabled })
+        .catch(() => {}); // silently ignore tabs without a content script
+    }
+  } catch { /* nothing to do */ }
+}
+
 
 // ─── Full Initialization (called on startup/install) ─────────────────────────
 async function initialize() {

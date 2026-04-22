@@ -1,13 +1,9 @@
 /**
- * Content Script — Nafer Shield
- * Aggressive cosmetic + element blocking. Runs at document_start in every frame.
- *
- * Strategy (layered):
- *   Layer 1 — CSS Injection: hide known ad containers via CSS before they render.
- *   Layer 2 — Image Guard: intercept <img> elements whose src matches ad networks.
- *   Layer 3 — Iframe Guard: block iframes loading from ad network domains.
- *   Layer 4 — MutationObserver: catch dynamically injected ads (SPAs, lazy-load).
- *   Layer 5 — Popup Guard: block window.open() calls used for pop-under ads.
+ * Content Script — Nafer Shield v3.2
+ * FIXES:
+ *   - Removed Google/YouTube infrastructure domains (was breaking YouTube)
+ *   - Removed script.remove() (too destructive, DNR handles this at network level)
+ *   - Added PROTECTION_TOGGLED listener to remove CSS when user disables extension
  */
 
 (function () {
@@ -16,149 +12,152 @@
   const _api = globalThis.chrome ?? globalThis.browser;
   if (!_api?.runtime) return;
 
-  // ─── Layer 5: Popup Guard (inject BEFORE any page script runs) ─────────────
-  // Override window.open immediately at document_start to kill pop-unders.
-  const _originalOpen = window.open.bind(window);
-  window.open = function (url, ...args) {
-    if (url && isAdUrl(url)) {
-      console.debug('[Nafer] Blocked popup:', url);
-      return null;
-    }
-    return _originalOpen(url, ...args);
-  };
+  // ─── Sites where we skip aggressive scanning ────────────────────────────────
+  // These sites use Google infrastructure domains legitimately.
+  // DNR rules (EasyList) already handle ad blocking there at network level.
+  const SAFE_HOSTS = [
+    'youtube.com', 'www.youtube.com', 'm.youtube.com',
+    'google.com', 'www.google.com',
+    'mail.google.com', 'drive.google.com',
+    'gmail.com',
+  ];
+  const hostname    = location.hostname;
+  const isSafeHost  = SAFE_HOSTS.some(h => hostname === h || hostname.endsWith('.' + h));
 
-  // ─── Ad Network URL patterns (must be inline for document_start timing) ────
-  // We duplicate the patterns here because content scripts cannot import modules.
-  const AD_DOMAIN_PATTERNS = [
+  // ─── Ad Network Domains ────────────────────────────────────────────────────
+  // NOTE: Google/YouTube infrastructure deliberately excluded.
+  // They are blocked at network level by EasyList (DNR static rules).
+  // Blocking them here destroys YouTube's UI.
+  const AD_DOMAINS = [
     'exoclick.com', 'trafficjunky.com', 'trafficjunky.net',
-    'juicyads.com', 'juicyads.net', 'adnium.com', 'propellerads.com',
-    'popcash.net', 'popads.net', 'hilltopads.com', 'hilltopads.net',
-    'ero-advertising.com', 'trafficstars.com', 'plugrush.com',
-    'adspyglass.com', 'revcontent.com', 'mgid.com', 'onclickmax.com',
-    'clickadu.com', 'adskeeper.com', 'googlesyndication.com',
-    'doubleclick.net', 'googleadservices.com', 'taboola.com',
-    'outbrain.com', 'adf.ly', 'linkbucks.com', 'shorte.st',
-    'coinhive.com', 'coin-hive.com',
+    'juicyads.com',  'juicyads.net',    'adnium.com',
+    'propellerads.com', 'popcash.net',  'popads.net',
+    'hilltopads.com',   'hilltopads.net', 'ero-advertising.com',
+    'trafficstars.com', 'plugrush.com', 'adspyglass.com',
+    'revcontent.com',   'mgid.com',     'onclickmax.com',
+    'clickadu.com',     'adskeeper.com','adf.ly',
+    'linkbucks.com',    'coinhive.com', 'coin-hive.com',
+    'taboola.com',      'outbrain.com', 'natpal.com',
+    'cpx.to',           'popcash.net',
   ];
 
-  const AD_IMAGE_PATTERNS = AD_DOMAIN_PATTERNS.map(d => d.replace('.', '\\.'));
-  const AD_REGEX = new RegExp(AD_IMAGE_PATTERNS.join('|'), 'i');
+  const AD_REGEX = new RegExp(
+    AD_DOMAINS.map(d => d.replace(/\./g, '\\.')).join('|'), 'i'
+  );
 
   function isAdUrl(url) {
-    try {
-      if (!url) return false;
-      return AD_REGEX.test(url);
-    } catch { return false; }
+    try { return !!(url && AD_REGEX.test(url)); } catch { return false; }
   }
 
-  // ─── Layer 1: Early CSS Injection ───────────────────────────────────────────
-  let _injectedStyle = null;
+  // ─── Popup Guard ───────────────────────────────────────────────────────────
+  const _origOpen = window.open.bind(window);
+  window.open = function (url, ...args) {
+    if (isAdUrl(url)) { console.debug('[Nafer] Blocked popup:', url); return null; }
+    return _origOpen(url, ...args);
+  };
 
-  function ensureStyleNode() {
-    if (_injectedStyle && _injectedStyle.isConnected) return;
-    _injectedStyle = document.createElement('style');
-    _injectedStyle.id = 'nafer-cosmetic';
-    _injectedStyle.setAttribute('data-nafer', '1');
-    (document.head ?? document.documentElement).prepend(_injectedStyle);
+  // ─── CSS Injection ─────────────────────────────────────────────────────────
+  let _styleEl = null;
+
+  function getStyleEl() {
+    if (_styleEl?.isConnected) return _styleEl;
+    _styleEl = document.createElement('style');
+    _styleEl.id = 'nafer-cosmetic';
+    (document.head ?? document.documentElement).prepend(_styleEl);
+    return _styleEl;
   }
 
   function applyCSS(css) {
-    ensureStyleNode();
-    if (_injectedStyle.textContent !== css) {
-      _injectedStyle.textContent = css;
-    }
+    const el = getStyleEl();
+    if (el.textContent !== css) el.textContent = css;
   }
 
-  // Request cosmetic CSS from background (has full filter list knowledge)
-  function fetchAndApplyCosmetics() {
+  function removeCSS() {
+    if (_styleEl) { _styleEl.remove(); _styleEl = null; }
+  }
+
+  function fetchCosmetics() {
     _api.runtime.sendMessage(
-      { type: 'GET_COSMETIC_CSS', payload: { hostname: location.hostname } },
-      (response) => {
-        if (_api.runtime.lastError) return;
-        if (response?.css) applyCSS(response.css);
-      }
+      { type: 'GET_COSMETIC_CSS', payload: { hostname } },
+      (res) => { if (!_api.runtime.lastError && res?.css) applyCSS(res.css); }
     );
   }
 
-  fetchAndApplyCosmetics();
-
-  // ─── Layer 2 & 3: Element Guard (img + iframe) ───────────────────────────────
-  function guardElement(el) {
-    const src = el.src || el.getAttribute('data-src') || '';
-    if (!src) return;
-
-    if (isAdUrl(src)) {
-      el.style.cssText = 'display:none!important;visibility:hidden!important;width:0!important;height:0!important;';
-      el.removeAttribute('src');
-      el.removeAttribute('data-src');
-      console.debug('[Nafer] Blocked element:', el.tagName, src.slice(0, 60));
+  // ─── Protection Toggle Listener ─────────────────────────────────────────────
+  // When user disables protection, remove injected CSS from this tab immediately.
+  _api.runtime.onMessage.addListener((msg) => {
+    if (msg?.type === 'PROTECTION_TOGGLED') {
+      if (msg.enabled) {
+        fetchCosmetics(); // re-apply
+      } else {
+        removeCSS();      // remove CSS so ads can show (protection is off)
+      }
     }
+  });
+
+  // ─── Element Guards ────────────────────────────────────────────────────────
+  function guardImg(el) {
+    const src = el.src || el.dataset?.src || el.getAttribute('data-lazy-src') || '';
+    if (!src || !isAdUrl(src)) return;
+    el.style.cssText = 'display:none!important;visibility:hidden!important;width:0!important;height:0!important;';
+    el.removeAttribute('src');
+    el.removeAttribute('data-src');
+    console.debug('[Nafer] Blocked img:', src.slice(0, 60));
   }
 
   function guardIframe(el) {
     const src = el.src || el.getAttribute('src') || '';
-    if (isAdUrl(src)) {
-      el.style.cssText = 'display:none!important;';
-      el.setAttribute('src', 'about:blank');
-      el.sandbox = 'allow-nothing'; // non-standard but extra safety
-      console.debug('[Nafer] Blocked iframe:', src.slice(0, 60));
-    }
+    if (!src || !isAdUrl(src)) return;
+    el.style.cssText = 'display:none!important;';
+    el.setAttribute('src', 'about:blank');
+    console.debug('[Nafer] Blocked iframe:', src.slice(0, 60));
   }
 
-  function scanNode(node) {
+  function scanElement(node) {
     if (!(node instanceof Element)) return;
-
-    if (node.tagName === 'IMG') { guardElement(node); return; }
-    if (node.tagName === 'IFRAME') { guardIframe(node); return; }
-    if (node.tagName === 'SCRIPT' && isAdUrl(node.src)) {
-      node.remove();
-      return;
-    }
-
-    // Scan children
-    node.querySelectorAll('img').forEach(guardElement);
+    const tag = node.tagName;
+    // NOTE: No script.remove() — DNR handles script blocking safely at network level
+    if (tag === 'IMG')    { guardImg(node);    return; }
+    if (tag === 'IFRAME') { guardIframe(node); return; }
+    node.querySelectorAll('img').forEach(guardImg);
     node.querySelectorAll('iframe').forEach(guardIframe);
   }
 
-  // ─── Layer 4: MutationObserver ───────────────────────────────────────────────
-  let _debounce = null;
-  const _pendingNodes = [];
+  // ─── Start ─────────────────────────────────────────────────────────────────
+  function start() {
+    // Fetch cosmetic CSS first
+    fetchCosmetics();
 
-  const observer = new MutationObserver((mutations) => {
-    let hasNew = false;
-    for (const m of mutations) {
-      for (const node of m.addedNodes) {
-        if (node.nodeType === 1) { // Element nodes only
-          _pendingNodes.push(node);
-          hasNew = true;
+    // Skip aggressive element scanning on safe hosts (YouTube, Google)
+    if (isSafeHost) return;
+
+    // Scan existing DOM
+    scanElement(document.documentElement);
+
+    // Watch for dynamic injections (SPAs)
+    let _debounce = null;
+    const _queue  = [];
+
+    new MutationObserver((mutations) => {
+      let hasNew = false;
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType === 1) { _queue.push(node); hasNew = true; }
         }
       }
-    }
-
-    if (!hasNew) return;
-
-    clearTimeout(_debounce);
-    _debounce = setTimeout(() => {
-      const nodes = _pendingNodes.splice(0);
-      for (const node of nodes) scanNode(node);
-      // Re-apply cosmetic CSS in case a SPA replaced the head
-      fetchAndApplyCosmetics();
-    }, 150);
-  });
-
-  function startObserver() {
-    observer.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-    });
-    // Scan existing DOM on load
-    scanNode(document.documentElement);
+      if (!hasNew) return;
+      clearTimeout(_debounce);
+      _debounce = setTimeout(() => {
+        _queue.splice(0).forEach(scanElement);
+        fetchCosmetics();
+      }, 150);
+    }).observe(document.documentElement, { childList: true, subtree: true });
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startObserver, { once: true });
+    document.addEventListener('DOMContentLoaded', start, { once: true });
   } else {
-    startObserver();
+    start();
   }
 
 })();

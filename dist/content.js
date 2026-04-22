@@ -5,15 +5,19 @@
     const _api = globalThis.chrome ?? globalThis.browser;
     if (!_api?.runtime)
       return;
-    const _originalOpen = window.open.bind(window);
-    window.open = function(url, ...args) {
-      if (url && isAdUrl(url)) {
-        console.debug("[Nafer] Blocked popup:", url);
-        return null;
-      }
-      return _originalOpen(url, ...args);
-    };
-    const AD_DOMAIN_PATTERNS = [
+    const SAFE_HOSTS = [
+      "youtube.com",
+      "www.youtube.com",
+      "m.youtube.com",
+      "google.com",
+      "www.google.com",
+      "mail.google.com",
+      "drive.google.com",
+      "gmail.com"
+    ];
+    const hostname = location.hostname;
+    const isSafeHost = SAFE_HOSTS.some((h) => hostname === h || hostname.endsWith("." + h));
+    const AD_DOMAINS = [
       "exoclick.com",
       "trafficjunky.com",
       "trafficjunky.net",
@@ -34,126 +38,135 @@
       "onclickmax.com",
       "clickadu.com",
       "adskeeper.com",
-      "googlesyndication.com",
-      "doubleclick.net",
-      "googleadservices.com",
-      "taboola.com",
-      "outbrain.com",
       "adf.ly",
       "linkbucks.com",
-      "shorte.st",
       "coinhive.com",
-      "coin-hive.com"
+      "coin-hive.com",
+      "taboola.com",
+      "outbrain.com",
+      "natpal.com",
+      "cpx.to",
+      "popcash.net"
     ];
-    const AD_IMAGE_PATTERNS = AD_DOMAIN_PATTERNS.map((d) => d.replace(".", "\\."));
-    const AD_REGEX = new RegExp(AD_IMAGE_PATTERNS.join("|"), "i");
+    const AD_REGEX = new RegExp(
+      AD_DOMAINS.map((d) => d.replace(/\./g, "\\.")).join("|"),
+      "i"
+    );
     function isAdUrl(url) {
       try {
-        if (!url)
-          return false;
-        return AD_REGEX.test(url);
+        return !!(url && AD_REGEX.test(url));
       } catch {
         return false;
       }
     }
-    let _injectedStyle = null;
-    function ensureStyleNode() {
-      if (_injectedStyle && _injectedStyle.isConnected)
-        return;
-      _injectedStyle = document.createElement("style");
-      _injectedStyle.id = "nafer-cosmetic";
-      _injectedStyle.setAttribute("data-nafer", "1");
-      (document.head ?? document.documentElement).prepend(_injectedStyle);
+    const _origOpen = window.open.bind(window);
+    window.open = function(url, ...args) {
+      if (isAdUrl(url)) {
+        console.debug("[Nafer] Blocked popup:", url);
+        return null;
+      }
+      return _origOpen(url, ...args);
+    };
+    let _styleEl = null;
+    function getStyleEl() {
+      if (_styleEl?.isConnected)
+        return _styleEl;
+      _styleEl = document.createElement("style");
+      _styleEl.id = "nafer-cosmetic";
+      (document.head ?? document.documentElement).prepend(_styleEl);
+      return _styleEl;
     }
     function applyCSS(css) {
-      ensureStyleNode();
-      if (_injectedStyle.textContent !== css) {
-        _injectedStyle.textContent = css;
+      const el = getStyleEl();
+      if (el.textContent !== css)
+        el.textContent = css;
+    }
+    function removeCSS() {
+      if (_styleEl) {
+        _styleEl.remove();
+        _styleEl = null;
       }
     }
-    function fetchAndApplyCosmetics() {
+    function fetchCosmetics() {
       _api.runtime.sendMessage(
-        { type: "GET_COSMETIC_CSS", payload: { hostname: location.hostname } },
-        (response) => {
-          if (_api.runtime.lastError)
-            return;
-          if (response?.css)
-            applyCSS(response.css);
+        { type: "GET_COSMETIC_CSS", payload: { hostname } },
+        (res) => {
+          if (!_api.runtime.lastError && res?.css)
+            applyCSS(res.css);
         }
       );
     }
-    fetchAndApplyCosmetics();
-    function guardElement(el) {
-      const src = el.src || el.getAttribute("data-src") || "";
-      if (!src)
-        return;
-      if (isAdUrl(src)) {
-        el.style.cssText = "display:none!important;visibility:hidden!important;width:0!important;height:0!important;";
-        el.removeAttribute("src");
-        el.removeAttribute("data-src");
-        console.debug("[Nafer] Blocked element:", el.tagName, src.slice(0, 60));
+    _api.runtime.onMessage.addListener((msg) => {
+      if (msg?.type === "PROTECTION_TOGGLED") {
+        if (msg.enabled) {
+          fetchCosmetics();
+        } else {
+          removeCSS();
+        }
       }
+    });
+    function guardImg(el) {
+      const src = el.src || el.dataset?.src || el.getAttribute("data-lazy-src") || "";
+      if (!src || !isAdUrl(src))
+        return;
+      el.style.cssText = "display:none!important;visibility:hidden!important;width:0!important;height:0!important;";
+      el.removeAttribute("src");
+      el.removeAttribute("data-src");
+      console.debug("[Nafer] Blocked img:", src.slice(0, 60));
     }
     function guardIframe(el) {
       const src = el.src || el.getAttribute("src") || "";
-      if (isAdUrl(src)) {
-        el.style.cssText = "display:none!important;";
-        el.setAttribute("src", "about:blank");
-        el.sandbox = "allow-nothing";
-        console.debug("[Nafer] Blocked iframe:", src.slice(0, 60));
-      }
+      if (!src || !isAdUrl(src))
+        return;
+      el.style.cssText = "display:none!important;";
+      el.setAttribute("src", "about:blank");
+      console.debug("[Nafer] Blocked iframe:", src.slice(0, 60));
     }
-    function scanNode(node) {
+    function scanElement(node) {
       if (!(node instanceof Element))
         return;
-      if (node.tagName === "IMG") {
-        guardElement(node);
+      const tag = node.tagName;
+      if (tag === "IMG") {
+        guardImg(node);
         return;
       }
-      if (node.tagName === "IFRAME") {
+      if (tag === "IFRAME") {
         guardIframe(node);
         return;
       }
-      if (node.tagName === "SCRIPT" && isAdUrl(node.src)) {
-        node.remove();
-        return;
-      }
-      node.querySelectorAll("img").forEach(guardElement);
+      node.querySelectorAll("img").forEach(guardImg);
       node.querySelectorAll("iframe").forEach(guardIframe);
     }
-    let _debounce = null;
-    const _pendingNodes = [];
-    const observer = new MutationObserver((mutations) => {
-      let hasNew = false;
-      for (const m of mutations) {
-        for (const node of m.addedNodes) {
-          if (node.nodeType === 1) {
-            _pendingNodes.push(node);
-            hasNew = true;
+    function start() {
+      fetchCosmetics();
+      if (isSafeHost)
+        return;
+      scanElement(document.documentElement);
+      let _debounce = null;
+      const _queue = [];
+      new MutationObserver((mutations) => {
+        let hasNew = false;
+        for (const m of mutations) {
+          for (const node of m.addedNodes) {
+            if (node.nodeType === 1) {
+              _queue.push(node);
+              hasNew = true;
+            }
           }
         }
-      }
-      if (!hasNew)
-        return;
-      clearTimeout(_debounce);
-      _debounce = setTimeout(() => {
-        const nodes = _pendingNodes.splice(0);
-        for (const node of nodes)
-          scanNode(node);
-        fetchAndApplyCosmetics();
-      }, 150);
-    });
-    function startObserver() {
-      observer.observe(document.documentElement, {
-        childList: true,
-        subtree: true
-      });
-      scanNode(document.documentElement);
+        if (!hasNew)
+          return;
+        clearTimeout(_debounce);
+        _debounce = setTimeout(() => {
+          _queue.splice(0).forEach(scanElement);
+          fetchCosmetics();
+        }, 150);
+      }).observe(document.documentElement, { childList: true, subtree: true });
     }
     if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", startObserver, { once: true });
+      document.addEventListener("DOMContentLoaded", start, { once: true });
     } else {
-      startObserver();
+      start();
     }
   })();
 })();
