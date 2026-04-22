@@ -1,4 +1,4 @@
-# 🛡️ Nafer Shield
+# <img src="assets/icons/icon-128.png" width="48" align="center"> Nafer Shield
 
 **Premium Ad-Blocking Engine — Fast, Private, and Beautiful.**
 
