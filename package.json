@@ -1,7 +1,7 @@
 {
   "name": "nafer-shield",
   "version": "1.0.0",
-  "description": "High-performance ad blocking engine by gtqn. Focused on privacy and speed.",
+  "description": "Lightweight, fast, and modern ad blocker.",
   "author": "gtqn",
   "private": true,
   "type": "module",
