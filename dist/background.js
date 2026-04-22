@@ -61,6 +61,93 @@ var FilterEngine = class {
   }
 };
 
+// src/core/AdNetworks.js
+var AD_NETWORK_DOMAINS = [
+  // ─── Alternative Ad Networks (The "Hard" Ones) ───────────────────────────
+  "exoclick.com",
+  "trafficjunky.com",
+  "trafficjunky.net",
+  "juicyads.com",
+  "juicyads.net",
+  "adnium.com",
+  "propellerads.com",
+  "popcash.net",
+  "popads.net",
+  "hilltopads.com",
+  "hilltopads.net",
+  "ero-advertising.com",
+  "trafficstars.com",
+  "plugrush.com",
+  "adspyglass.com",
+  "revcontent.com",
+  "mgid.com",
+  "onclickmax.com",
+  "clickadu.com",
+  "adskeeper.com",
+  "adf.ly",
+  "linkbucks.com",
+  "shorte.st",
+  "coinhive.com",
+  "coin-hive.com",
+  "cpx.to",
+  "popcash.net",
+  "taboola.com",
+  "outbrain.com",
+  "natpal.com"
+];
+
+// src/core/NetworkRulesEngine.js
+var _api2 = globalThis.chrome ?? globalThis.browser;
+var NetworkRulesEngine = class {
+  constructor() {
+    this.BASE_RULE_ID = 1e5;
+  }
+  /**
+   * Installs dynamic rules for the registered ad network domains.
+   */
+  async installAdNetworkRules() {
+    if (!_api2.declarativeNetRequest)
+      return;
+    try {
+      const existing = await _api2.declarativeNetRequest.getDynamicRules();
+      const toRemove = existing.filter((r) => r.id >= this.BASE_RULE_ID).map((r) => r.id);
+      const addRules = AD_NETWORK_DOMAINS.map((domain, index) => ({
+        id: this.BASE_RULE_ID + index,
+        priority: 1,
+        action: { type: "block" },
+        condition: {
+          urlFilter: domain,
+          resourceTypes: ["script", "sub_frame", "image", "xmlhttprequest", "ping", "other"]
+        }
+      }));
+      await _api2.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: toRemove,
+        addRules
+      });
+      console.log(`[NetworkEngine] Installed ${addRules.length} dynamic ad network rules.`);
+    } catch (err) {
+      console.error("[NetworkEngine] Failed to install dynamic rules:", err.message);
+    }
+  }
+  /**
+   * Completely removes all dynamic ad network rules.
+   */
+  async uninstallAdNetworkRules() {
+    if (!_api2.declarativeNetRequest)
+      return;
+    try {
+      const existing = await _api2.declarativeNetRequest.getDynamicRules();
+      const toRemove = existing.filter((r) => r.id >= this.BASE_RULE_ID).map((r) => r.id);
+      if (toRemove.length > 0) {
+        await _api2.declarativeNetRequest.updateDynamicRules({ removeRuleIds: toRemove });
+        console.log(`[NetworkEngine] Uninstalled ${toRemove.length} dynamic rules.`);
+      }
+    } catch (err) {
+      console.error("[NetworkEngine] Failed to uninstall dynamic rules:", err.message);
+    }
+  }
+};
+
 // src/infrastructure/storage/StorageAdapter.js
 var StorageAdapter = class {
   constructor() {
@@ -230,7 +317,7 @@ var StatsService = class {
 };
 
 // src/application/services/FilterListService.js
-var _api2 = globalThis.chrome ?? globalThis.browser;
+var _api3 = globalThis.chrome ?? globalThis.browser;
 var BUILT_IN_LISTS = [
   {
     id: "nafer-base",
@@ -268,10 +355,10 @@ var FilterListService = class {
       return null;
     list.enabled = !list.enabled;
     await this._storage.set("nafer_filter_lists", lists);
-    if (_api2?.declarativeNetRequest?.updateEnabledRulesets) {
+    if (_api3?.declarativeNetRequest?.updateEnabledRulesets) {
       try {
         const rulesetIds = id === "easylist" ? ["easylist-1", "easylist-2"] : [id];
-        await _api2.declarativeNetRequest.updateEnabledRulesets({
+        await _api3.declarativeNetRequest.updateEnabledRulesets({
           enableRulesetIds: list.enabled ? rulesetIds : [],
           disableRulesetIds: list.enabled ? [] : rulesetIds
         });
@@ -295,6 +382,38 @@ var FilterListService = class {
   }
 };
 
+// src/application/services/HealthService.js
+var _api4 = globalThis.chrome ?? globalThis.browser;
+var HealthService = class {
+  constructor(storage2, onRecover) {
+    this.storage = storage2;
+    this.onRecover = onRecover;
+  }
+  /**
+   * Checks if DNR rulesets and dynamic rules are correctly loaded.
+   * If not, triggers recovery (initialization).
+   */
+  async runCheck(manifestRulesetIds, expectedDynamicCount) {
+    console.log("[Health] Running state check...");
+    try {
+      const enabledSets = await _api4.declarativeNetRequest.getEnabledRulesets();
+      const hasStatic = manifestRulesetIds.some((id) => enabledSets.includes(id));
+      const dynamicRules = await _api4.declarativeNetRequest.getDynamicRules();
+      const hasDynamic = dynamicRules.length >= expectedDynamicCount;
+      if (!hasStatic || !hasDynamic) {
+        console.warn("[Health] Missing active rules! Triggering recovery...", { hasStatic, hasDynamic });
+        await this.onRecover();
+        return false;
+      }
+      console.log("[Health] All systems healthy.");
+      return true;
+    } catch (err) {
+      console.error("[Health] Check failed:", err.message);
+      return false;
+    }
+  }
+};
+
 // src/background/MessageRouter.js
 var MessageRouter = class {
   /**
@@ -302,12 +421,14 @@ var MessageRouter = class {
    *   engine: import('../core/FilterEngine.js').FilterEngine,
    *   statsService: import('../application/services/StatsService.js').StatsService,
    *   filterListService: import('../application/services/FilterListService.js').FilterListService,
+   *   onEnabledChanged?: (enabled: boolean) => void,
    * }} deps
    */
-  constructor({ engine: engine2, statsService, filterListService }) {
+  constructor({ engine: engine2, statsService, filterListService, onEnabledChanged }) {
     this._engine = engine2;
     this._stats = statsService;
     this._lists = filterListService;
+    this._onEnabledChanged = onEnabledChanged;
   }
   /**
    * Handle an incoming message.
@@ -330,6 +451,9 @@ var MessageRouter = class {
       }
       case "SET_ENABLED": {
         await this._engine.setEnabled(payload.enabled);
+        if (this._onEnabledChanged) {
+          this._onEnabledChanged(payload.enabled);
+        }
         return { ok: true };
       }
       case "TOGGLE_DOMAIN_PAUSE": {
@@ -343,6 +467,9 @@ var MessageRouter = class {
       }
       case "TOGGLE_FILTER_LIST": {
         const list = await this._lists.toggle(payload.id);
+        if (this._onEnabledChanged) {
+          this._onEnabledChanged(true);
+        }
         return { list };
       }
       case "ADD_CUSTOM_LIST": {
@@ -378,69 +505,115 @@ var MessageRouter = class {
 };
 
 // background.js
-var _api3 = globalThis.chrome ?? globalThis.browser;
+var _api5 = globalThis.chrome ?? globalThis.browser;
 var storage = new StorageAdapter();
 var engine = new FilterEngine(storage);
+var netEngine = new NetworkRulesEngine();
 var stats = new StatsService(storage);
 var filterLists = new FilterListService(storage);
-var router = new MessageRouter({ engine, statsService: stats, filterListService: filterLists });
+var health = new HealthService(storage, () => initialize());
+var router = new MessageRouter({
+  engine,
+  statsService: stats,
+  filterListService: filterLists,
+  onEnabledChanged: () => syncDNRState()
+  // Immediate re-sync on toggle
+});
 var MANIFEST_RULESETS = ["nafer-base", "easylist-1", "easylist-2"];
-async function initialize() {
-  console.log("[Nafer Shield] Initializing hardened engine...");
+async function syncDNRState() {
   try {
-    await engine.initialize();
-    await filterLists.initializeDefaultLists();
     const isEnabled = await engine.isEnabled();
     if (isEnabled) {
       const allLists = await filterLists.getAll();
-      let toEnable = [];
-      allLists.forEach((list) => {
+      const toEnable = [];
+      for (const list of allLists) {
         if (!list.enabled)
-          return;
-        if (list.id === "easylist") {
+          continue;
+        if (list.id === "easylist")
           toEnable.push("easylist-1", "easylist-2");
-        } else if (MANIFEST_RULESETS.includes(list.id)) {
+        else if (MANIFEST_RULESETS.includes(list.id))
           toEnable.push(list.id);
-        }
-      });
+      }
       if (toEnable.length === 0)
         toEnable.push("nafer-base");
       const toDisable = MANIFEST_RULESETS.filter((id) => !toEnable.includes(id));
-      await _api3.declarativeNetRequest.updateEnabledRulesets({
+      await _api5.declarativeNetRequest.updateEnabledRulesets({
         enableRulesetIds: toEnable,
         disableRulesetIds: toDisable
       });
-      console.log(`[Nafer Shield] Protection ON. Active: ${toEnable.join(", ")}`);
+      await netEngine.installAdNetworkRules();
+      console.log("[Nafer] 🛡️ Protection ENABLED");
     } else {
-      await _api3.declarativeNetRequest.updateEnabledRulesets({
+      await _api5.declarativeNetRequest.updateEnabledRulesets({
         disableRulesetIds: MANIFEST_RULESETS
       });
-      console.log("[Nafer Shield] Protection OFF.");
+      await netEngine.uninstallAdNetworkRules();
+      console.log("[Nafer] ⛔ Protection DISABLED");
     }
-    if (_api3.declarativeNetRequest?.setExtensionActionOptions) {
-      await _api3.declarativeNetRequest.setExtensionActionOptions({
+    broadcastToTabs(isEnabled);
+  } catch (err) {
+    console.error("[Nafer] DNR sync failed:", err.message);
+  }
+}
+async function broadcastToTabs(enabled) {
+  try {
+    const tabs = await _api5.tabs.query({});
+    for (const tab of tabs) {
+      if (!tab.id || tab.id < 0)
+        continue;
+      _api5.tabs.sendMessage(tab.id, { type: "PROTECTION_TOGGLED", enabled }).catch(() => {
+      });
+    }
+  } catch (err) {
+    console.warn("[Nafer] Broadcast failed:", err.message);
+  }
+}
+async function initialize() {
+  console.log("[Nafer v3.1] Initializing engine...");
+  try {
+    await engine.initialize();
+    await filterLists.initializeDefaultLists();
+    await syncDNRState();
+    if (_api5.declarativeNetRequest?.setExtensionActionOptions) {
+      await _api5.declarativeNetRequest.setExtensionActionOptions({
         displayActionCountAsBadgeText: true
       });
     }
-    if (_api3.declarativeNetRequest?.onRuleMatchedDebug) {
-      _api3.declarativeNetRequest.onRuleMatchedDebug.removeListener(handleRuleMatch);
-      _api3.declarativeNetRequest.onRuleMatchedDebug.addListener(handleRuleMatch);
+    if (_api5.declarativeNetRequest?.onRuleMatchedDebug) {
+      _api5.declarativeNetRequest.onRuleMatchedDebug.removeListener(handleRuleMatch);
+      _api5.declarativeNetRequest.onRuleMatchedDebug.addListener(handleRuleMatch);
     }
+    console.log("[Nafer v3.1] ✅ Ready");
   } catch (err) {
-    console.error("[Nafer Shield] Init error:", err.message);
+    console.error("[Nafer] Init error:", err.message);
   }
 }
 function handleRuleMatch(info) {
   stats.increment(info.tabId);
 }
+_api5.runtime.onInstalled.addListener(() => initialize());
+_api5.runtime.onStartup.addListener(() => initialize());
 initialize();
-_api3.alarms?.create("nafer-keepalive", { periodInMinutes: 0.5 });
-_api3.alarms?.onAlarm?.addListener(async (alarm) => {
-  if (alarm.name === "nafer-keepalive" && !engine.isReady())
-    await initialize();
+_api5.alarms?.create("nafer-keepalive", { periodInMinutes: 0.5 });
+_api5.alarms?.create("nafer-health-check", { periodInMinutes: 5 });
+_api5.alarms?.onAlarm?.addListener(async (alarm) => {
+  if (alarm.name === "nafer-keepalive") {
+    if (!engine.isReady())
+      await initialize();
+    return;
+  }
+  if (alarm.name === "nafer-health-check") {
+    const isEnabled = await engine.isEnabled();
+    if (!isEnabled)
+      return;
+    await health.runCheck(
+      MANIFEST_RULESETS,
+      Math.floor(AD_NETWORK_DOMAINS.length * 0.9)
+    );
+  }
 });
-_api3.runtime.onMessage.addListener((message, sender, sendResponse) => {
+_api5.runtime.onMessage.addListener((message, sender, sendResponse) => {
   router.handle(message, sender).then(sendResponse).catch((err) => sendResponse({ error: err.message }));
   return true;
 });
-_api3.tabs.onRemoved.addListener((tabId) => stats.clearTab(tabId));
+_api5.tabs.onRemoved.addListener((tabId) => stats.clearTab(tabId));

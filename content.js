@@ -1,12 +1,12 @@
 /**
- * Content Script — Entry Point
- * Nafer Shield Extension
- * Runs at document_start in every frame.
+ * Content Script — Nafer Shield v3.1 (Safe Edition)
  *
- * Fix 4 applied: MutationObserver now watches for new ad nodes injected by
- * SPAs (YouTube, Reddit etc.) and re-applies cosmetic CSS on demand.
- * The observer uses subtree:true so nested mutations are caught.
- * A 200ms debounce prevents thrashing on rapid DOM updates.
+ * Layer 1: CSS Injection (Static cosmetics)
+ * Layer 2: Element Guards (MutationObserver)
+ * Layer 3: Toggle Support (Live On/Off)
+ *
+ * CRITICAL: Aggressive scanning is skipped on SAFE_HOSTS (YouTube/Google)
+ * to ensure UI stability.
  */
 
 (function () {
@@ -15,71 +15,123 @@
   const _api = globalThis.chrome ?? globalThis.browser;
   if (!_api?.runtime) return;
 
-  const hostname = location.hostname;
-  if (!hostname) return;
+  // ─── Safe Hosts (Mainstream sites where we skip aggressive scanning) ──────
+  const SAFE_HOSTS = [
+    'youtube.com', 'www.youtube.com', 'm.youtube.com',
+    'google.com', 'www.google.com',
+    'mail.google.com', 'drive.google.com', 'gmail.com',
+  ];
+  const hostname   = location.hostname;
+  const isSafeHost = SAFE_HOSTS.some(h => hostname === h || hostname.endsWith('.' + h));
 
-  // ─── Cosmetic CSS Injection ───────────────────────────────────────────────────
-  let _injectedCSS = '';
+  // ─── Ad Network Domains (for content script filtering) ────────────────────
+  const AD_DOMAINS = [
+    'exoclick.com', 'trafficjunky.com', 'trafficjunky.net',
+    'juicyads.com', 'juicyads.net', 'adnium.com', 'propellerads.com',
+    'popcash.net', 'popads.net', 'hilltopads.com', 'hilltopads.net',
+    'ero-advertising.com', 'trafficstars.com', 'plugrush.com',
+    'adspyglass.com', 'revcontent.com', 'mgid.com', 'onclickmax.com',
+    'clickadu.com', 'adskeeper.com', 'taboola.com', 'outbrain.com',
+  ];
+  const AD_REGEX = new RegExp(AD_DOMAINS.map(d => d.replace(/\./g, '\\.')).join('|'), 'i');
 
-  function injectCSS(css) {
-    if (!css) return;
-    _injectedCSS = css;
-    let style = document.getElementById('nafer-cosmetic');
-    if (!style) {
-      style = document.createElement('style');
-      style.id = 'nafer-cosmetic';
-      style.setAttribute('data-nafer', '1');
-      (document.head ?? document.documentElement).appendChild(style);
-    }
-    // Update content (idempotent if css hasn't changed)
-    if (style.textContent !== css) {
-      style.textContent = css;
-    }
+  function isAdUrl(url) {
+    try { return !!(url && AD_REGEX.test(url)); } catch { return false; }
   }
 
-  function applyCosmetics() {
-    if (_injectedCSS) {
-      // Already have CSS — just re-inject the style node if it was removed
-      injectCSS(_injectedCSS);
-      return;
-    }
+  // ─── CSS Manager ──────────────────────────────────────────────────────────
+  let _styleEl = null;
+
+  function ensureStyle() {
+    if (_styleEl?.isConnected) return;
+    _styleEl = document.createElement('style');
+    _styleEl.id = 'nafer-cosmetic';
+    (document.head ?? document.documentElement).prepend(_styleEl);
+  }
+
+  function applyCSS(css) {
+    ensureStyle();
+    if (_styleEl.textContent !== css) _styleEl.textContent = css;
+  }
+
+  function removeCSS() {
+    if (_styleEl) { _styleEl.remove(); _styleEl = null; }
+  }
+
+  function fetchCosmetics() {
     _api.runtime.sendMessage(
       { type: 'GET_COSMETIC_CSS', payload: { hostname } },
-      (response) => {
-        if (_api.runtime.lastError) return;
-        if (response?.css) injectCSS(response.css);
-      }
+      (res) => { if (!_api.runtime.lastError && res?.css) applyCSS(res.css); }
     );
   }
 
-  // Initial injection
-  applyCosmetics();
-
-  // ─── MutationObserver — Fix 4 ─────────────────────────────────────────────────
-  // SPAs (YouTube, Reddit, Twitter) inject new ad containers after page load.
-  // We watch for any new nodes and re-apply cosmetics with a 200ms debounce
-  // to avoid performance issues during rapid DOM updates.
-  let _debounceTimer = null;
-
-  const observer = new MutationObserver((mutations) => {
-    // Only act if new nodes were added (not just attribute changes)
-    const hasNewNodes = mutations.some(m => m.addedNodes.length > 0);
-    if (!hasNewNodes) return;
-
-    clearTimeout(_debounceTimer);
-    _debounceTimer = setTimeout(applyCosmetics, 200);
+  // ─── Toggle Listener ──────────────────────────────────────────────────────
+  _api.runtime.onMessage.addListener((msg) => {
+    if (msg?.type === 'PROTECTION_TOGGLED') {
+      if (msg.enabled) fetchCosmetics();
+      else removeCSS();
+    }
   });
 
-  function startObserving() {
-    observer.observe(document.documentElement, {
-      childList: true,
-      subtree: true,   // catch deeply nested ad injections
-    });
+  // ─── Element Guards ───────────────────────────────────────────────────────
+  function guardImg(el) {
+    const src = el.src || el.dataset?.src || el.getAttribute('data-lazy-src') || '';
+    if (!src || !isAdUrl(src)) return;
+    el.style.cssText = 'display:none!important;visibility:hidden!important;width:0!important;height:0!important;';
+    el.removeAttribute('src');
+    console.debug('[Nafer] Blocked img:', src.slice(0, 60));
+  }
+
+  function guardIframe(el) {
+    const src = el.src || el.getAttribute('src') || '';
+    if (!src || !isAdUrl(src)) return;
+    el.style.cssText = 'display:none!important;';
+    el.setAttribute('src', 'about:blank');
+    console.debug('[Nafer] Blocked iframe:', src.slice(0, 60));
+  }
+
+  function scanElement(node) {
+    if (!(node instanceof Element)) return;
+    const tag = node.tagName;
+    if (tag === 'IMG') { guardImg(node); return; }
+    if (tag === 'IFRAME') { guardIframe(node); return; }
+    node.querySelectorAll('img').forEach(guardImg);
+    node.querySelectorAll('iframe').forEach(guardIframe);
+  }
+
+  // ─── Execution ────────────────────────────────────────────────────────────
+  function start() {
+    fetchCosmetics();
+
+    // Skip aggressive element scanning on safe hosts (YouTube, Google)
+    if (isSafeHost) return;
+
+    scanElement(document.documentElement);
+
+    // Watch for dynamic ads (SPAs)
+    let _debounce = null;
+    const _queue  = [];
+
+    new MutationObserver((mutations) => {
+      let hasNew = false;
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType === 1) { _queue.push(node); hasNew = true; }
+        }
+      }
+      if (!hasNew) return;
+      clearTimeout(_debounce);
+      _debounce = setTimeout(() => {
+        _queue.splice(0).forEach(scanElement);
+        fetchCosmetics();
+      }, 150);
+    }).observe(document.documentElement, { childList: true, subtree: true });
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startObserving, { once: true });
+    document.addEventListener('DOMContentLoaded', start, { once: true });
   } else {
-    startObserving();
+    start();
   }
+
 })();

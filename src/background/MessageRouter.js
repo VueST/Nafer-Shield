@@ -8,12 +8,14 @@ export class MessageRouter {
    *   engine: import('../core/FilterEngine.js').FilterEngine,
    *   statsService: import('../application/services/StatsService.js').StatsService,
    *   filterListService: import('../application/services/FilterListService.js').FilterListService,
+   *   onEnabledChanged?: (enabled: boolean) => void,
    * }} deps
    */
-  constructor({ engine, statsService, filterListService }) {
+  constructor({ engine, statsService, filterListService, onEnabledChanged }) {
     this._engine = engine;
     this._stats = statsService;
     this._lists = filterListService;
+    this._onEnabledChanged = onEnabledChanged;
   }
 
   /**
@@ -39,6 +41,9 @@ export class MessageRouter {
 
       case 'SET_ENABLED': {
         await this._engine.setEnabled(payload.enabled);
+        if (this._onEnabledChanged) {
+          this._onEnabledChanged(payload.enabled);
+        }
         return { ok: true };
       }
 
@@ -55,6 +60,9 @@ export class MessageRouter {
 
       case 'TOGGLE_FILTER_LIST': {
         const list = await this._lists.toggle(payload.id);
+        if (this._onEnabledChanged) {
+          this._onEnabledChanged(true); // Trigger re-sync if list toggled
+        }
         return { list };
       }
 
