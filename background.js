@@ -1,6 +1,6 @@
 /**
  * Background Service Worker — Entry Point
- * Nafer Shield Extension v2
+ * Nafer Shield Extension v2.2
  */
 
 import { FilterEngine }      from './src/core/FilterEngine.js';
@@ -18,74 +18,82 @@ const stats       = new StatsService(storage);
 const filterLists = new FilterListService(storage);
 const router      = new MessageRouter({ engine, statsService: stats, filterListService: filterLists });
 
+const MANIFEST_RULESETS = ['nafer-base', 'easylist-1', 'easylist-2'];
+
 // ─── Initialization ───────────────────────────────────────────────────────────
 async function initialize() {
-  console.log('[Nafer Shield] Waking up and synchronizing state...');
+  console.log('[Nafer Shield] Initializing hardened engine...');
   
-  await engine.initialize();
-  await filterLists.initializeDefaultLists();
+  try {
+    await engine.initialize();
+    await filterLists.initializeDefaultLists();
 
-  // Sync all enabled rulesets
-  const isEnabled = await engine.isEnabled();
-  if (isEnabled) {
-    const allLists = await filterLists.getAll();
-    const enabledIds = allLists.filter(l => l.enabled).map(l => l.id);
-    const disabledIds = allLists.filter(l => !l.enabled).map(l => l.id);
+    const isEnabled = await engine.isEnabled();
+    
+    if (isEnabled) {
+      const allLists = await filterLists.getAll();
+      let toEnable = [];
 
-    try {
-      await _api.declarativeNetRequest.updateEnabledRulesets({
-        enableRulesetIds: enabledIds,
-        disableRulesetIds: disabledIds
+      allLists.forEach(list => {
+        if (!list.enabled) return;
+        
+        if (list.id === 'easylist') {
+          toEnable.push('easylist-1', 'easylist-2');
+        } else if (MANIFEST_RULESETS.includes(list.id)) {
+          toEnable.push(list.id);
+        }
       });
-      console.log(`[Nafer Shield] Synced ${enabledIds.length} rulesets.`);
-    } catch (e) {
-      console.warn('[Nafer Shield] Ruleset sync warning:', e.message);
+
+      // Guarantee nafer-base is always tried if enabled
+      if (toEnable.length === 0) toEnable.push('nafer-base');
+
+      const toDisable = MANIFEST_RULESETS.filter(id => !toEnable.includes(id));
+
+      await _api.declarativeNetRequest.updateEnabledRulesets({
+        enableRulesetIds: toEnable,
+        disableRulesetIds: toDisable
+      });
+      
+      console.log(`[Nafer Shield] Protection ON. Active: ${toEnable.join(', ')}`);
+    } else {
+      await _api.declarativeNetRequest.updateEnabledRulesets({
+        disableRulesetIds: MANIFEST_RULESETS
+      });
+      console.log('[Nafer Shield] Protection OFF.');
     }
+
+    // Badge
+    if (_api.declarativeNetRequest?.setExtensionActionOptions) {
+      await _api.declarativeNetRequest.setExtensionActionOptions({
+        displayActionCountAsBadgeText: true
+      });
+    }
+
+    // Listener
+    if (_api.declarativeNetRequest?.onRuleMatchedDebug) {
+      _api.declarativeNetRequest.onRuleMatchedDebug.removeListener(handleRuleMatch);
+      _api.declarativeNetRequest.onRuleMatchedDebug.addListener(handleRuleMatch);
+    }
+
+  } catch (err) {
+    console.error('[Nafer Shield] Init error:', err.message);
   }
-
-  // Set badge options
-  _api.declarativeNetRequest?.setExtensionActionOptions?.({
-    displayActionCountAsBadgeText: true,
-  });
-
-  // ── Stats Tracking ──
-  // Works in Unpacked/Developer mode extensions with declarativeNetRequestFeedback permission.
-  if (_api.declarativeNetRequest?.onRuleMatchedDebug) {
-    _api.declarativeNetRequest.onRuleMatchedDebug.removeListener(handleRuleMatch);
-    _api.declarativeNetRequest.onRuleMatchedDebug.addListener(handleRuleMatch);
-  }
-
-  console.log('[Nafer Shield] Engine initialized and ready.');
 }
 
 function handleRuleMatch(info) {
   stats.increment(info.tabId);
 }
 
-initialize().catch(err => console.error('[Nafer Shield] Init error:', err));
+initialize();
 
-// ─── Service Worker Keepalive ─────────────────────────────────────────────────
-_api.alarms?.create('nafer-keepalive', { periodInMinutes: 0.4 });
-
+_api.alarms?.create('nafer-keepalive', { periodInMinutes: 0.5 });
 _api.alarms?.onAlarm?.addListener(async (alarm) => {
-  if (alarm.name === 'nafer-keepalive') {
-    if (!engine.isReady()) await initialize();
-    return;
-  }
-  if (alarm.name === 'nafer-update-lists') {
-    await filterLists.markUpdated();
-  }
+  if (alarm.name === 'nafer-keepalive' && !engine.isReady()) await initialize();
 });
 
-// ─── Message Listener ─────────────────────────────────────────────────────────
 _api.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  router
-    .handle(message, sender)
-    .then(sendResponse)
-    .catch(err => sendResponse({ error: err.message }));
+  router.handle(message, sender).then(sendResponse).catch(err => sendResponse({ error: err.message }));
   return true;
 });
 
-_api.tabs.onRemoved.addListener((tabId) => {
-  stats.clearTab(tabId);
-});
+_api.tabs.onRemoved.addListener(tabId => stats.clearTab(tabId));

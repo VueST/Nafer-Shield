@@ -46,9 +46,14 @@
         "path": "assets/rules/base-rules.json"
       },
       {
-        "id": "easylist",
+        "id": "easylist-1",
         "enabled": true,
-        "path": "assets/rules/easylist-rules.json"
+        "path": "assets/rules/easylist-1.json"
+      },
+      {
+        "id": "easylist-2",
+        "enabled": true,
+        "path": "assets/rules/easylist-2.json"
       }
     ]
   },

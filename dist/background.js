@@ -1,249 +1,63 @@
-// src/core/CosmeticFilter.js
-var CosmeticFilter = class _CosmeticFilter {
-  constructor() {
-    this._domainRules = /* @__PURE__ */ new Map();
-    this._genericRules = /* @__PURE__ */ new Set();
-    this._exceptions = /* @__PURE__ */ new Set();
-  }
-  /**
-   * Load cosmetic rules from parsed filter list.
-   * @param {Array<{domains: string[], selector: string, isException: boolean}>} rules
-   */
-  load(rules) {
-    for (const rule of rules) {
-      if (rule.isException) {
-        this._exceptions.add(rule.selector);
-        continue;
-      }
-      if (rule.domains.length === 0) {
-        this._genericRules.add(rule.selector);
-      } else {
-        for (const domain of rule.domains) {
-          if (!this._domainRules.has(domain)) {
-            this._domainRules.set(domain, /* @__PURE__ */ new Set());
-          }
-          this._domainRules.get(domain).add(rule.selector);
-        }
-      }
-    }
-  }
-  /**
-   * Get CSS hide rules for a given hostname.
-   * @param {string} hostname
-   * @returns {string} CSS text to inject
-   */
-  getCSSForHost(hostname) {
-    const selectors = new Set(this._genericRules);
-    const parts = hostname.split(".");
-    for (let i = 0; i < parts.length - 1; i++) {
-      const domain = parts.slice(i).join(".");
-      const domainSelectors = this._domainRules.get(domain);
-      if (domainSelectors) {
-        for (const s of domainSelectors)
-          selectors.add(s);
-      }
-    }
-    for (const ex of this._exceptions)
-      selectors.delete(ex);
-    if (selectors.size === 0)
-      return "";
-    return [...selectors].join(",\n") + " { display: none !important; }";
-  }
-  /** Serialize to plain object for storage */
-  serialize() {
-    return {
-      generic: [...this._genericRules],
-      domain: Object.fromEntries(
-        [...this._domainRules.entries()].map(([k, v]) => [k, [...v]])
-      ),
-      exceptions: [...this._exceptions]
-    };
-  }
-  /** Deserialize from storage */
-  static fromSerialized(data) {
-    const filter = new _CosmeticFilter();
-    filter._genericRules = new Set(data.generic ?? []);
-    filter._exceptions = new Set(data.exceptions ?? []);
-    for (const [domain, selectors] of Object.entries(data.domain ?? {})) {
-      filter._domainRules.set(domain, new Set(selectors));
-    }
-    return filter;
-  }
-};
-
-// src/core/FilterListParser.js
-var FilterListParser = class {
-  /**
-   * Parse raw filter list text into an array of rule objects.
-   * @param {string} text
-   * @returns {{ network: NetworkRule[], cosmetic: CosmeticRule[] }}
-   */
-  static parse(text) {
-    const network = [];
-    const cosmetic = [];
-    for (const raw of text.split("\n")) {
-      const line = raw.trim();
-      if (!line || line.startsWith("!") || line.startsWith("["))
-        continue;
-      const cosmeticMatch = line.match(/^([^#]*)#(@)?#\??(.*)/);
-      if (cosmeticMatch) {
-        const [, domains, exception, selector] = cosmeticMatch;
-        cosmetic.push({
-          domains: domains ? domains.split(",").map((d) => d.trim()).filter(Boolean) : [],
-          selector: selector.trim(),
-          isException: Boolean(exception)
-        });
-        continue;
-      }
-      const netRule = this._parseNetworkRule(line);
-      if (netRule)
-        network.push(netRule);
-    }
-    return { network, cosmetic };
-  }
-  /** @private */
-  static _parseNetworkRule(line) {
-    if (!line)
-      return null;
-    const isException = line.startsWith("@@");
-    const pattern = isException ? line.slice(2) : line;
-    const dollarIdx = pattern.lastIndexOf("$");
-    let urlPattern = pattern;
-    const options = {};
-    if (dollarIdx !== -1) {
-      urlPattern = pattern.slice(0, dollarIdx);
-      const opts = pattern.slice(dollarIdx + 1).split(",");
-      for (const opt of opts) {
-        const [key, val] = opt.trim().split("=");
-        options[key.replace(/^~/, "")] = val ?? true;
-      }
-    }
-    if (!urlPattern)
-      return null;
-    return {
-      pattern: urlPattern,
-      isException,
-      options,
-      // Convert to a simple regex-ready string
-      urlFilter: this._toUrlFilter(urlPattern)
-    };
-  }
-  /** @private */
-  static _toUrlFilter(pattern) {
-    if (pattern.startsWith("||")) {
-      return pattern.slice(2).replace("^", "");
-    }
-    return pattern;
-  }
-};
-
 // src/core/FilterEngine.js
 var _api = globalThis.chrome ?? globalThis.browser;
-var STATIC_RULESETS = ["nafer-base", "easylist"];
 var FilterEngine = class {
   /** @param {import('../infrastructure/storage/StorageAdapter.js').StorageAdapter} storage */
   constructor(storage2) {
     this._storage = storage2;
-    this._cosmetic = new CosmeticFilter();
-    this._initialized = false;
     this._enabled = true;
+    this._pausedDomains = [];
+    this._isReady = false;
   }
-  /**
-   * Initialize from stored data.
-   * Called on every service worker wake-up — restores state from storage.
-   */
   async initialize() {
-    const storedEnabled = await this._storage.get("nafer_enabled");
-    this._enabled = storedEnabled !== false;
-    await this._applyEnabledState(this._enabled);
-    const cosmeticData = await this._storage.get("nafer_cosmetic_rules");
-    if (cosmeticData) {
-      this._cosmetic = CosmeticFilter.fromSerialized(cosmeticData);
-    }
-    this._initialized = true;
-    console.log(`[Nafer Shield] FilterEngine ready. enabled=${this._enabled}`);
+    this._enabled = await this._storage.get("nafer_enabled") ?? true;
+    this._pausedDomains = await this._storage.get("nafer_paused_domains") ?? [];
+    this._isReady = true;
   }
-  /** Returns true if engine has been initialized this worker lifetime */
   isReady() {
-    return this._initialized;
+    return this._isReady;
   }
-  /**
-   * Load and index a raw filter list text.
-   * @param {string} _id  unique list ID (unused for DNR — rules are pre-compiled)
-   * @param {string} text raw EasyList text
-   */
-  async loadFilterList(_id, text) {
-    const { cosmetic } = FilterListParser.parse(text);
-    this._cosmetic.load(cosmetic);
-    await this._storage.set("nafer_cosmetic_rules", this._cosmetic.serialize());
+  async isEnabled() {
+    return await this._storage.get("nafer_enabled") ?? this._enabled;
   }
-  /**
-   * Get CSS to inject for a hostname.
-   * @param {string} hostname
-   * @returns {string}
-   */
-  getCSSForHost(hostname) {
-    if (!this._initialized)
-      return "";
-    return this._cosmetic.getCSSForHost(hostname);
+  async isDomainPaused(hostname) {
+    const paused = await this._storage.get("nafer_paused_domains") || [];
+    return paused.includes(hostname);
   }
-  /** Check if a domain is paused (allowlisted) */
-  async isDomainPaused(domain) {
-    const paused = await this._storage.get("nafer_paused_domains") ?? [];
-    return paused.includes(domain);
-  }
-  /** Toggle pause state for a domain */
-  async toggleDomainPause(domain) {
-    const paused = await this._storage.get("nafer_paused_domains") ?? [];
-    const idx = paused.indexOf(domain);
-    if (idx === -1) {
-      paused.push(domain);
-    } else {
-      paused.splice(idx, 1);
-    }
-    await this._storage.set("nafer_paused_domains", paused);
-    await this._syncDomainAllowlist(paused);
-    return idx === -1;
-  }
-  /** @private Sync DNR dynamic rules with paused domains list */
-  async _syncDomainAllowlist(pausedDomains) {
-    if (!_api?.declarativeNetRequest)
-      return;
-    const existing = await _api.declarativeNetRequest.getDynamicRules();
-    const toRemove = existing.filter((r) => r.id >= 9e4).map((r) => r.id);
-    const toAdd = pausedDomains.map((domain, i) => ({
-      id: 9e4 + i,
-      priority: 9999,
-      action: { type: "allow" },
-      condition: { requestDomains: [domain] }
-    }));
-    await _api.declarativeNetRequest.updateDynamicRules({
-      removeRuleIds: toRemove,
-      addRules: toAdd
-    });
-  }
-  /** Global enable / disable */
   async setEnabled(enabled) {
     this._enabled = enabled;
     await this._storage.set("nafer_enabled", enabled);
-    await this._applyEnabledState(enabled);
   }
-  /** Get enabled state (from memory — always correct after initialize()) */
-  async isEnabled() {
-    return this._enabled;
-  }
-  /** @private Apply enabled state to DNR static rulesets */
-  async _applyEnabledState(enabled) {
-    if (!_api?.declarativeNetRequest?.updateEnabledRulesets)
-      return;
-    try {
-      await _api.declarativeNetRequest.updateEnabledRulesets({
-        enableRulesetIds: enabled ? STATIC_RULESETS : [],
-        disableRulesetIds: enabled ? [] : STATIC_RULESETS
-      });
-    } catch (e) {
-      console.warn("[Nafer Shield] updateEnabledRulesets:", e.message);
+  async toggleDomainPause(hostname) {
+    let paused = await this._storage.get("nafer_paused_domains") || [];
+    if (paused.includes(hostname)) {
+      paused = paused.filter((d) => d !== hostname);
+    } else {
+      paused.push(hostname);
     }
+    await this._storage.set("nafer_paused_domains", paused);
+    return paused.includes(hostname);
+  }
+  /**
+   * Generates powerful cosmetic CSS to hide ad containers.
+   * In a full implementation, this would parse real filter lists.
+   */
+  getCSSForHost(hostname) {
+    const genericSelectors = [
+      'div[class*="ad-"]',
+      'div[id*="ad-"]',
+      'aside[class*="ad"]',
+      'section[class*="ad"]',
+      'iframe[src*="googleads"]',
+      "ins.adsbygoogle",
+      ".trc_rbox_container",
+      ".outbrain",
+      ".taboola-ad",
+      "div[data-ad-unit]",
+      'div[id^="google_ads_iframe"]',
+      'div[class*="Sponsored"]',
+      'div[class*="promoted"]'
+    ];
+    return `${genericSelectors.join(",\n")} { display: none !important; height: 0 !important; width: 0 !important; visibility: hidden !important; pointer-events: none !important; }`;
   }
 };
 
@@ -430,35 +244,7 @@ var BUILT_IN_LISTS = [
     name: "EasyList",
     url: "https://easylist.to/easylist/easylist.txt",
     enabled: true,
-    builtIn: false
-  },
-  {
-    id: "easyprivacy",
-    name: "EasyPrivacy",
-    url: "https://easylist.to/easylist/easyprivacy.txt",
-    enabled: true,
-    builtIn: false
-  },
-  {
-    id: "ublock-filters",
-    name: "uBlock Filters",
-    url: "https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/filters.txt",
-    enabled: true,
-    builtIn: false
-  },
-  {
-    id: "arabic-filters",
-    name: "Arabic Ads & Trackers",
-    url: "https://raw.githubusercontent.com/easylist/easylistArabic/master/easylistarabic.txt",
-    enabled: true,
-    builtIn: false
-  },
-  {
-    id: "annoyances",
-    name: "Fanboy Annoyances",
-    url: "https://easylist.to/easylist/fanboy-annoyance.txt",
-    enabled: false,
-    builtIn: false
+    builtIn: true
   }
 ];
 var FilterListService = class {
@@ -466,22 +252,15 @@ var FilterListService = class {
   constructor(storage2) {
     this._storage = storage2;
   }
-  /** Initialize default lists on first install */
   async initializeDefaultLists() {
     const existing = await this._storage.get("nafer_filter_lists");
     if (!existing) {
       await this._storage.set("nafer_filter_lists", BUILT_IN_LISTS);
     }
   }
-  /** Get all filter lists */
   async getAll() {
     return await this._storage.get("nafer_filter_lists") ?? BUILT_IN_LISTS;
   }
-  /**
-   * Toggle a list enabled/disabled.
-   * Fix 3: also updates DNR rulesets so the change takes effect immediately.
-   * @param {string} id
-   */
   async toggle(id) {
     const lists = await this.getAll();
     const list = lists.find((l) => l.id === id);
@@ -491,18 +270,17 @@ var FilterListService = class {
     await this._storage.set("nafer_filter_lists", lists);
     if (_api2?.declarativeNetRequest?.updateEnabledRulesets) {
       try {
+        const rulesetIds = id === "easylist" ? ["easylist-1", "easylist-2"] : [id];
         await _api2.declarativeNetRequest.updateEnabledRulesets({
-          enableRulesetIds: list.enabled ? [id] : [],
-          disableRulesetIds: list.enabled ? [] : [id]
+          enableRulesetIds: list.enabled ? rulesetIds : [],
+          disableRulesetIds: list.enabled ? [] : rulesetIds
         });
-        console.log(`[Nafer Shield] Ruleset "${id}" ${list.enabled ? "enabled" : "disabled"}`);
       } catch (e) {
-        console.warn(`[Nafer Shield] Could not toggle ruleset "${id}":`, e.message);
+        console.warn(`[Nafer Shield] Toggle error for ${id}:`, e.message);
       }
     }
     return list;
   }
-  /** Add a custom filter list */
   async addCustom(name, url) {
     const lists = await this.getAll();
     const id = `custom-${Date.now()}`;
@@ -510,19 +288,10 @@ var FilterListService = class {
     await this._storage.set("nafer_filter_lists", lists);
     return id;
   }
-  /** Remove a custom list */
   async remove(id) {
     const lists = await this.getAll();
     const filtered = lists.filter((l) => l.id !== id);
     await this._storage.set("nafer_filter_lists", filtered);
-  }
-  /** Get last update timestamp */
-  async getLastUpdated() {
-    return this._storage.get("nafer_lists_last_updated");
-  }
-  /** Mark lists as updated now */
-  async markUpdated() {
-    await this._storage.set("nafer_lists_last_updated", Date.now());
   }
 };
 
@@ -615,53 +384,63 @@ var engine = new FilterEngine(storage);
 var stats = new StatsService(storage);
 var filterLists = new FilterListService(storage);
 var router = new MessageRouter({ engine, statsService: stats, filterListService: filterLists });
+var MANIFEST_RULESETS = ["nafer-base", "easylist-1", "easylist-2"];
 async function initialize() {
-  console.log("[Nafer Shield] Waking up and synchronizing state...");
-  await engine.initialize();
-  await filterLists.initializeDefaultLists();
-  const isEnabled = await engine.isEnabled();
-  if (isEnabled) {
-    const allLists = await filterLists.getAll();
-    const enabledIds = allLists.filter((l) => l.enabled).map((l) => l.id);
-    const disabledIds = allLists.filter((l) => !l.enabled).map((l) => l.id);
-    try {
-      await _api3.declarativeNetRequest.updateEnabledRulesets({
-        enableRulesetIds: enabledIds,
-        disableRulesetIds: disabledIds
+  console.log("[Nafer Shield] Initializing hardened engine...");
+  try {
+    await engine.initialize();
+    await filterLists.initializeDefaultLists();
+    const isEnabled = await engine.isEnabled();
+    if (isEnabled) {
+      const allLists = await filterLists.getAll();
+      let toEnable = [];
+      allLists.forEach((list) => {
+        if (!list.enabled)
+          return;
+        if (list.id === "easylist") {
+          toEnable.push("easylist-1", "easylist-2");
+        } else if (MANIFEST_RULESETS.includes(list.id)) {
+          toEnable.push(list.id);
+        }
       });
-      console.log(`[Nafer Shield] Synced ${enabledIds.length} rulesets.`);
-    } catch (e) {
-      console.warn("[Nafer Shield] Ruleset sync warning:", e.message);
+      if (toEnable.length === 0)
+        toEnable.push("nafer-base");
+      const toDisable = MANIFEST_RULESETS.filter((id) => !toEnable.includes(id));
+      await _api3.declarativeNetRequest.updateEnabledRulesets({
+        enableRulesetIds: toEnable,
+        disableRulesetIds: toDisable
+      });
+      console.log(`[Nafer Shield] Protection ON. Active: ${toEnable.join(", ")}`);
+    } else {
+      await _api3.declarativeNetRequest.updateEnabledRulesets({
+        disableRulesetIds: MANIFEST_RULESETS
+      });
+      console.log("[Nafer Shield] Protection OFF.");
     }
+    if (_api3.declarativeNetRequest?.setExtensionActionOptions) {
+      await _api3.declarativeNetRequest.setExtensionActionOptions({
+        displayActionCountAsBadgeText: true
+      });
+    }
+    if (_api3.declarativeNetRequest?.onRuleMatchedDebug) {
+      _api3.declarativeNetRequest.onRuleMatchedDebug.removeListener(handleRuleMatch);
+      _api3.declarativeNetRequest.onRuleMatchedDebug.addListener(handleRuleMatch);
+    }
+  } catch (err) {
+    console.error("[Nafer Shield] Init error:", err.message);
   }
-  _api3.declarativeNetRequest?.setExtensionActionOptions?.({
-    displayActionCountAsBadgeText: true
-  });
-  if (_api3.declarativeNetRequest?.onRuleMatchedDebug) {
-    _api3.declarativeNetRequest.onRuleMatchedDebug.removeListener(handleRuleMatch);
-    _api3.declarativeNetRequest.onRuleMatchedDebug.addListener(handleRuleMatch);
-  }
-  console.log("[Nafer Shield] Engine initialized and ready.");
 }
 function handleRuleMatch(info) {
   stats.increment(info.tabId);
 }
-initialize().catch((err) => console.error("[Nafer Shield] Init error:", err));
-_api3.alarms?.create("nafer-keepalive", { periodInMinutes: 0.4 });
+initialize();
+_api3.alarms?.create("nafer-keepalive", { periodInMinutes: 0.5 });
 _api3.alarms?.onAlarm?.addListener(async (alarm) => {
-  if (alarm.name === "nafer-keepalive") {
-    if (!engine.isReady())
-      await initialize();
-    return;
-  }
-  if (alarm.name === "nafer-update-lists") {
-    await filterLists.markUpdated();
-  }
+  if (alarm.name === "nafer-keepalive" && !engine.isReady())
+    await initialize();
 });
 _api3.runtime.onMessage.addListener((message, sender, sendResponse) => {
   router.handle(message, sender).then(sendResponse).catch((err) => sendResponse({ error: err.message }));
   return true;
 });
-_api3.tabs.onRemoved.addListener((tabId) => {
-  stats.clearTab(tabId);
-});
+_api3.tabs.onRemoved.addListener((tabId) => stats.clearTab(tabId));
