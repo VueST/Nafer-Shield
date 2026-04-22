@@ -64,13 +64,10 @@ var FilterEngine = class {
 // src/core/AdNetworks.js
 var AD_NETWORK_DOMAINS = [
   // ── Mainstream Ad Networks ───────────────────────────────────────────────
-  "doubleclick.net",
-  "googlesyndication.com",
-  "googleadservices.com",
-  "adservice.google.com",
-  "adservice.google.co.uk",
-  "pagead2.googlesyndication.com",
-  "tpc.googlesyndication.com",
+  // NOTE: Google/YouTube infrastructure domains (doubleclick, googlesyndication)
+  // are intentionally EXCLUDED here. They are already covered by EasyList static
+  // rules with smarter per-context matching. Blocking them at domain level breaks
+  // YouTube and other Google-powered sites.
   // ── Taboola / Outbrain ───────────────────────────────────────────────────
   "taboola.com",
   "trc.taboola.com",
@@ -512,12 +509,14 @@ var MessageRouter = class {
    *   engine: import('../core/FilterEngine.js').FilterEngine,
    *   statsService: import('../application/services/StatsService.js').StatsService,
    *   filterListService: import('../application/services/FilterListService.js').FilterListService,
+   *   onEnabledChanged?: () => Promise<void>,
    * }} deps
    */
-  constructor({ engine: engine2, statsService, filterListService }) {
+  constructor({ engine: engine2, statsService, filterListService, onEnabledChanged }) {
     this._engine = engine2;
     this._stats = statsService;
     this._lists = filterListService;
+    this._onEnabledChanged = onEnabledChanged ?? (() => Promise.resolve());
   }
   /**
    * Handle an incoming message.
@@ -540,6 +539,7 @@ var MessageRouter = class {
       }
       case "SET_ENABLED": {
         await this._engine.setEnabled(payload.enabled);
+        await this._onEnabledChanged();
         return { ok: true };
       }
       case "TOGGLE_DOMAIN_PAUSE": {
@@ -595,13 +595,16 @@ var netEngine = new NetworkRulesEngine();
 var stats = new StatsService(storage);
 var filterLists = new FilterListService(storage);
 var health = new HealthService(storage, () => initialize());
-var router = new MessageRouter({ engine, statsService: stats, filterListService: filterLists });
+var router = new MessageRouter({
+  engine,
+  statsService: stats,
+  filterListService: filterLists,
+  onEnabledChanged: () => syncDNRState()
+  // ← Toggle wired here
+});
 var MANIFEST_RULESETS = ["nafer-base", "easylist-1", "easylist-2"];
-async function initialize() {
-  console.log("[Nafer v3] Initializing...");
+async function syncDNRState() {
   try {
-    await engine.initialize();
-    await filterLists.initializeDefaultLists();
     const isEnabled = await engine.isEnabled();
     if (isEnabled) {
       const allLists = await filterLists.getAll();
@@ -622,25 +625,36 @@ async function initialize() {
         disableRulesetIds: toDisable
       });
       await netEngine.installAdNetworkRules();
-      if (_api5.declarativeNetRequest?.setExtensionActionOptions) {
-        await _api5.declarativeNetRequest.setExtensionActionOptions({
-          displayActionCountAsBadgeText: true
-        });
-      }
-      if (_api5.declarativeNetRequest?.onRuleMatchedDebug) {
-        _api5.declarativeNetRequest.onRuleMatchedDebug.removeListener(onRuleMatch);
-        _api5.declarativeNetRequest.onRuleMatchedDebug.addListener(onRuleMatch);
-      }
-      console.log(`[Nafer v3] 🛡️ Active: static=[${toEnable.join(",")}] + dynamic=${AD_NETWORK_DOMAINS.length} domains`);
+      console.log("[Nafer] 🛡️ Protection ON");
     } else {
       await _api5.declarativeNetRequest.updateEnabledRulesets({
         disableRulesetIds: MANIFEST_RULESETS
       });
       await netEngine.uninstallAdNetworkRules();
-      console.log("[Nafer v3] Protection disabled by user.");
+      console.log("[Nafer] ⛔ Protection OFF");
     }
   } catch (err) {
-    console.error("[Nafer v3] Init error:", err.message);
+    console.error("[Nafer] syncDNRState error:", err.message);
+  }
+}
+async function initialize() {
+  console.log("[Nafer v3.1] Initializing...");
+  try {
+    await engine.initialize();
+    await filterLists.initializeDefaultLists();
+    await syncDNRState();
+    if (_api5.declarativeNetRequest?.setExtensionActionOptions) {
+      await _api5.declarativeNetRequest.setExtensionActionOptions({
+        displayActionCountAsBadgeText: true
+      });
+    }
+    if (_api5.declarativeNetRequest?.onRuleMatchedDebug) {
+      _api5.declarativeNetRequest.onRuleMatchedDebug.removeListener(onRuleMatch);
+      _api5.declarativeNetRequest.onRuleMatchedDebug.addListener(onRuleMatch);
+    }
+    console.log("[Nafer v3.1] ✅ Ready");
+  } catch (err) {
+    console.error("[Nafer] Init error:", err.message);
   }
 }
 function onRuleMatch(info) {
@@ -664,7 +678,6 @@ _api5.alarms?.onAlarm?.addListener(async (alarm) => {
     await health.runCheck(
       MANIFEST_RULESETS,
       Math.floor(AD_NETWORK_DOMAINS.length * 0.9)
-      // allow 10% margin
     );
   }
 });

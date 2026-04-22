@@ -12,13 +12,10 @@
 // These will be blocked at the network level via declarativeNetRequest.
 export const AD_NETWORK_DOMAINS = [
   // ── Mainstream Ad Networks ───────────────────────────────────────────────
-  'doubleclick.net',
-  'googlesyndication.com',
-  'googleadservices.com',
-  'adservice.google.com',
-  'adservice.google.co.uk',
-  'pagead2.googlesyndication.com',
-  'tpc.googlesyndication.com',
+  // NOTE: Google/YouTube infrastructure domains (doubleclick, googlesyndication)
+  // are intentionally EXCLUDED here. They are already covered by EasyList static
+  // rules with smarter per-context matching. Blocking them at domain level breaks
+  // YouTube and other Google-powered sites.
 
   // ── Taboola / Outbrain ───────────────────────────────────────────────────
   'taboola.com',
@@ -93,12 +90,13 @@ export const AD_NETWORK_DOMAINS = [
 // not by domain. Works even when the ad image is served from a CDN.
 
 export const COSMETIC_PATTERNS = [
-  // ── Generic Ad Container Patterns ────────────────────────────────────────
-  '[id*="google_ads"]',
-  '[id^="div-gpt-ad"]',
-  '[class*="adsbygoogle"]',
+  // ── Google AdSense (safe selectors — won't match YouTube UI) ─────────────
   'ins.adsbygoogle',
   'amp-ad',
+  '[id^="div-gpt-ad"]',
+  '[data-ad-unit]',
+  '[data-ad-slot]',
+  '[data-ad-client]',
 
   // ── Structural Patterns (ad containers identified by size/attributes) ─────
   'iframe[src*="exoclick"]',

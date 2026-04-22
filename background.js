@@ -1,7 +1,7 @@
 /**
- * Background Service Worker — Nafer Shield v3.0
- * Three-layer blocking: Static DNR + Dynamic Network Rules + Cosmetic CSS.
- * HealthService ensures the engine self-heals if Chrome disables rules silently.
+ * Background Service Worker — Nafer Shield v3.1
+ * Fixes: Toggle On/Off now works instantly via syncDNRState().
+ * Fixes: YouTube no longer broken (removed Google CDN from dynamic blocklist).
  */
 
 import { FilterEngine }        from './src/core/FilterEngine.js';
@@ -16,69 +16,82 @@ import { AD_NETWORK_DOMAINS }  from './src/core/AdNetworks.js';
 const _api = globalThis.chrome ?? globalThis.browser;
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
-const storage       = new StorageAdapter();
-const engine        = new FilterEngine(storage);
-const netEngine     = new NetworkRulesEngine();
-const stats         = new StatsService(storage);
-const filterLists   = new FilterListService(storage);
-const health        = new HealthService(storage, () => initialize());
-const router        = new MessageRouter({ engine, statsService: stats, filterListService: filterLists });
+const storage     = new StorageAdapter();
+const engine      = new FilterEngine(storage);
+const netEngine   = new NetworkRulesEngine();
+const stats       = new StatsService(storage);
+const filterLists = new FilterListService(storage);
+const health      = new HealthService(storage, () => initialize());
+const router      = new MessageRouter({
+  engine,
+  statsService:     stats,
+  filterListService: filterLists,
+  onEnabledChanged: () => syncDNRState(), // ← Toggle wired here
+});
 
 const MANIFEST_RULESETS = ['nafer-base', 'easylist-1', 'easylist-2'];
 
-// ─── Core Initialization ──────────────────────────────────────────────────────
-async function initialize() {
-  console.log('[Nafer v3] Initializing...');
-
+// ─── DNR Sync (lightweight — called on toggle) ────────────────────────────────
+// Called whenever the user flips the global On/Off switch.
+// Does NOT re-initialize engine state — only syncs DNR rules.
+async function syncDNRState() {
   try {
-    await engine.initialize();
-    await filterLists.initializeDefaultLists();
-
     const isEnabled = await engine.isEnabled();
 
     if (isEnabled) {
-      // Layer 1: Static Rulesets (EasyList shards)
       const allLists = await filterLists.getAll();
       const toEnable = [];
       for (const list of allLists) {
         if (!list.enabled) continue;
-        if (list.id === 'easylist')      toEnable.push('easylist-1', 'easylist-2');
+        if (list.id === 'easylist') toEnable.push('easylist-1', 'easylist-2');
         else if (MANIFEST_RULESETS.includes(list.id)) toEnable.push(list.id);
       }
       if (toEnable.length === 0) toEnable.push('nafer-base');
       const toDisable = MANIFEST_RULESETS.filter(id => !toEnable.includes(id));
 
       await _api.declarativeNetRequest.updateEnabledRulesets({
-        enableRulesetIds: toEnable,
+        enableRulesetIds:  toEnable,
         disableRulesetIds: toDisable,
       });
-
-      // Layer 2: Dynamic network rules (ad network domains)
       await netEngine.installAdNetworkRules();
-
-      // Badge counter
-      if (_api.declarativeNetRequest?.setExtensionActionOptions) {
-        await _api.declarativeNetRequest.setExtensionActionOptions({
-          displayActionCountAsBadgeText: true,
-        });
-      }
-
-      // Real-time stats tracking
-      if (_api.declarativeNetRequest?.onRuleMatchedDebug) {
-        _api.declarativeNetRequest.onRuleMatchedDebug.removeListener(onRuleMatch);
-        _api.declarativeNetRequest.onRuleMatchedDebug.addListener(onRuleMatch);
-      }
-
-      console.log(`[Nafer v3] 🛡️ Active: static=[${toEnable.join(',')}] + dynamic=${AD_NETWORK_DOMAINS.length} domains`);
+      console.log('[Nafer] 🛡️ Protection ON');
     } else {
+      // Disable everything immediately
       await _api.declarativeNetRequest.updateEnabledRulesets({
         disableRulesetIds: MANIFEST_RULESETS,
       });
       await netEngine.uninstallAdNetworkRules();
-      console.log('[Nafer v3] Protection disabled by user.');
+      console.log('[Nafer] ⛔ Protection OFF');
     }
   } catch (err) {
-    console.error('[Nafer v3] Init error:', err.message);
+    console.error('[Nafer] syncDNRState error:', err.message);
+  }
+}
+
+// ─── Full Initialization (called on startup/install) ─────────────────────────
+async function initialize() {
+  console.log('[Nafer v3.1] Initializing...');
+  try {
+    await engine.initialize();
+    await filterLists.initializeDefaultLists();
+    await syncDNRState(); // reuse the same logic
+
+    // Badge counter
+    if (_api.declarativeNetRequest?.setExtensionActionOptions) {
+      await _api.declarativeNetRequest.setExtensionActionOptions({
+        displayActionCountAsBadgeText: true,
+      });
+    }
+
+    // Real-time stats
+    if (_api.declarativeNetRequest?.onRuleMatchedDebug) {
+      _api.declarativeNetRequest.onRuleMatchedDebug.removeListener(onRuleMatch);
+      _api.declarativeNetRequest.onRuleMatchedDebug.addListener(onRuleMatch);
+    }
+
+    console.log('[Nafer v3.1] ✅ Ready');
+  } catch (err) {
+    console.error('[Nafer] Init error:', err.message);
   }
 }
 
@@ -93,21 +106,19 @@ initialize();
 
 // ─── Alarms ───────────────────────────────────────────────────────────────────
 _api.alarms?.create('nafer-keepalive',    { periodInMinutes: 0.5 });
-_api.alarms?.create('nafer-health-check', { periodInMinutes: 5 });
+_api.alarms?.create('nafer-health-check', { periodInMinutes: 5   });
 
 _api.alarms?.onAlarm?.addListener(async (alarm) => {
   if (alarm.name === 'nafer-keepalive') {
     if (!engine.isReady()) await initialize();
     return;
   }
-
   if (alarm.name === 'nafer-health-check') {
     const isEnabled = await engine.isEnabled();
-    if (!isEnabled) return; // no check needed when disabled
-
+    if (!isEnabled) return;
     await health.runCheck(
       MANIFEST_RULESETS,
-      Math.floor(AD_NETWORK_DOMAINS.length * 0.9) // allow 10% margin
+      Math.floor(AD_NETWORK_DOMAINS.length * 0.9)
     );
   }
 });
