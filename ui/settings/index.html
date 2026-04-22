@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Settings — Nafer Shield</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <div class="settings-app">
+    <!-- Sidebar: Modern Deep Navy -->
+    <aside class="sidebar">
+      <div class="sidebar__brand">
+        <svg class="logo" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2L4 5V11C4 16.06 7.41 20.74 12 22C16.59 20.74 20 16.06 20 11V5L12 2Z" fill="white"/>
+          <path d="M9 12L11 14L15 10" stroke="#4608ad" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="brand-name">Nafer Shield</span>
+      </div>
+      
+      <nav class="sidebar__nav">
+        <ul class="nav-list">
+          <li class="nav-item active" data-section="general">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+            General
+          </li>
+          <li class="nav-item" data-section="filters">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            Filter Lists
+          </li>
+          <li class="nav-item" data-section="whitelist">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v6c0 6 8 10 8 10z"/></svg>
+            Whitelist
+          </li>
+          <li class="nav-item" data-section="about">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            About
+          </li>
+        </ul>
+      </nav>
+
+      <div class="sidebar__footer">
+        <span class="version-tag">Version 1.0.0</span>
+      </div>
+    </aside>
+
+    <!-- Main Content: Centered & Fluid -->
+    <main class="main-container">
+      <div class="content-wrapper">
+        
+        <!-- Section: General -->
+        <section id="section-general" class="content-section active">
+          <header class="section-header">
+            <h1 class="section-title">General Settings</h1>
+            <p class="section-desc">Manage the core behavior of your protection shield.</p>
+          </header>
+
+          <div class="settings-group">
+            <div class="setting-card">
+              <div class="setting-card__body">
+                <div class="setting-card__info">
+                  <h4>Global Shield Protection</h4>
+                  <p>Enable or disable ad blocking on all websites globally.</p>
+                </div>
+                <div class="setting-card__action">
+                  <label class="switch-modern">
+                    <input type="checkbox" id="toggle-global" checked>
+                    <span class="switch-slider"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="setting-card">
+              <div class="setting-card__body">
+                <div class="setting-card__info">
+                  <h4>Automatic Updates</h4>
+                  <p>Keep your filter lists updated for the best protection.</p>
+                </div>
+                <div class="setting-card__action">
+                  <label class="switch-modern">
+                    <input type="checkbox" checked disabled>
+                    <span class="switch-slider"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Section: Filters -->
+        <section id="section-filters" class="content-section">
+          <header class="section-header">
+            <h1 class="section-title">Filter Lists</h1>
+            <p class="section-desc">Enable specialized lists for regional or specific ad blocking.</p>
+          </header>
+          <div class="filters-grid" id="filter-container">
+            <!-- Dynamic lists -->
+          </div>
+        </section>
+
+        <!-- Section: Whitelist -->
+        <section id="section-whitelist" class="content-section">
+          <header class="section-header">
+            <h1 class="section-title">Whitelist</h1>
+            <p class="section-desc">Domains listed here will not be filtered by Nafer Shield.</p>
+          </header>
+          <div class="card-modern">
+            <div id="whitelist-empty" class="empty-placeholder">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v6c0 6 8 10 8 10z"/></svg>
+              <p>Your whitelist is currently empty.</p>
+            </div>
+            <ul class="whitelist-list" id="whitelist-container"></ul>
+          </div>
+        </section>
+
+        <!-- Section: About -->
+        <section id="section-about" class="content-section">
+          <header class="section-header">
+            <h1 class="section-title">About Nafer Shield</h1>
+          </header>
+          <div class="card-modern about-card">
+            <div class="about-hero">
+              <div class="about-logo">🛡️</div>
+              <h3>Nafer Shield</h3>
+              <p>Developed by <strong>gtqn</strong></p>
+            </div>
+            <hr class="divider">
+            <div class="setting-card">
+              <div class="setting-card__body">
+                <div class="setting-card__info">
+                  <h4>Discord Support</h4>
+                  <p>Contact the developer directly on Discord: <strong>gtqn</strong></p>
+                </div>
+                <div class="setting-card__action">
+                  <a href="https://discord.com/users/gtqn" target="_blank" class="btn-discord">
+                    Connect
+                  </a>
+                </div>
+              </div>
+            </div>
+            <div class="about-footer">
+              <p>Developed with ❤️ by the Nafer Team.</p>
+              <div class="links">
+                <a href="#">Official Website</a>
+                <a href="#">Documentation</a>
+                <a href="#">GitHub</a>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <script src="settings.js"></script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+{
+  "manifest_version": 3,
+  "name": "Nafer Shield",
+  "short_name": "Nafer",
+  "version": "1.0.0",
+  "description": "Premium ad blocking engine for a cleaner web experience. Developed by gtqn.",
+  "author": "gtqn",
+
+  "icons": {
+    "16":  "assets/icons/icon-16.png",
+    "32":  "assets/icons/icon-32.png",
+    "48":  "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
+  },
+
+  "action": {
+    "default_popup": "ui/popup/index.html",
+    "default_icon": {
+      "16":  "assets/icons/icon-16.png",
+      "32":  "assets/icons/icon-32.png",
+      "48":  "assets/icons/icon-48.png",
+      "128": "assets/icons/icon-128.png"
+    },
+    "default_title": "Nafer Shield"
+  },
+
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["dist/content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "nafer-base",
+        "enabled": true,
+        "path": "assets/rules/base-rules.json"
+      },
+      {
+        "id": "easylist",
+        "enabled": true,
+        "path": "assets/rules/easylist-rules.json"
+      }
+    ]
+  },
+
+  "permissions": [
+    "storage",
+    "tabs",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "declarativeNetRequestWithHostAccess",
+    "alarms"
+  ],
+
+  "host_permissions": ["<all_urls>"],
+
+  "options_ui": {
+    "page": "ui/settings/index.html",
+    "open_in_tab": true
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/web/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

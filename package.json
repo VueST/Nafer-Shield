@@ -1,0 +1,20 @@
+{
+  "name": "nafer-shield",
+  "version": "1.0.0",
+  "description": "High-performance ad blocking engine by gtqn. Focused on privacy and speed.",
+  "author": "gtqn",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node tools/build.js",
+    "build:chrome": "node tools/build.js --target=chrome",
+    "build:firefox": "node tools/build.js --target=firefox",
+    "compile-rules": "node tools/compile-rules.js",
+    "dev": "node tools/build.js --watch",
+    "lint": "eslint src/"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0",
+    "eslint": "^9.0.0"
+  }
+}

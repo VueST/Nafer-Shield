@@ -1,0 +1,290 @@
+/* 
+ * Nafer Shield — Enterprise Settings Styles
+ * Modern, Balanced, Centered Layout
+ */
+
+:root {
+  --primary: #4608ad;
+  --primary-light: #f4f1fa;
+  --sidebar-bg: #11111a;
+  --bg-app: #f8f9fc;
+  --text-main: #2d3436;
+  --text-muted: #636e72;
+  --border-color: #e9ecef;
+  --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+  --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  background-color: var(--bg-app);
+  color: var(--text-main);
+  height: 100vh;
+  overflow: hidden;
+}
+
+.settings-app {
+  display: flex;
+  width: 100%;
+  height: 100vh;
+}
+
+/* ─── Sidebar ─── */
+.sidebar {
+  width: 260px;
+  background-color: var(--sidebar-bg);
+  color: white;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  box-shadow: 4px 0 15px rgba(0,0,0,0.1);
+}
+
+.sidebar__brand {
+  padding: 32px 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo {
+  width: 32px;
+  height: 32px;
+}
+
+.brand-name {
+  font-weight: 700;
+  font-size: 19px;
+  letter-spacing: -0.5px;
+}
+
+.sidebar__nav {
+  flex-grow: 1;
+  padding: 0 12px;
+}
+
+.nav-list {
+  list-style: none;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 4px;
+  transition: var(--transition);
+}
+
+.nav-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: white;
+}
+
+.nav-item.active {
+  background: var(--primary);
+  color: white;
+}
+
+.nav-icon {
+  width: 18px;
+  height: 18px;
+  opacity: 0.7;
+}
+
+.sidebar__footer {
+  padding: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.version-tag {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.3);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* ─── Main Container: Perfectly Centered ─── */
+.main-container {
+  flex-grow: 1;
+  display: flex;
+  justify-content: center; /* Horizontally center content */
+  overflow-y: auto;
+  padding: 60px 40px;
+}
+
+.content-wrapper {
+  width: 100%;
+  max-width: 800px; /* Fixed width for focus and balance */
+}
+
+.content-section {
+  display: none;
+  animation: fadeIn 0.3s ease;
+}
+
+.content-section.active {
+  display: block;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.section-header {
+  margin-bottom: 40px;
+}
+
+.section-title {
+  font-size: 32px;
+  font-weight: 800;
+  color: #1a1a1a;
+  margin-bottom: 8px;
+}
+
+.section-desc {
+  font-size: 16px;
+  color: var(--text-muted);
+}
+
+/* ─── Cards ─── */
+.setting-card, .card-modern {
+  background: white;
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+  box-shadow: var(--card-shadow);
+  margin-bottom: 12px; /* Reduced from 20px */
+  overflow: hidden;
+}
+
+.setting-card__body {
+  padding: 20px 24px; /* Slightly reduced padding */
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.setting-card__info h4 {
+  font-size: 16px; /* Slightly smaller title */
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.setting-card__info p {
+  font-size: 13px; /* Slightly smaller text */
+  color: var(--text-muted);
+}
+
+/* Filters Grid */
+.filters-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px; /* Reduced from 16px */
+}
+
+/* Switch Modern */
+.switch-modern {
+  position: relative;
+  display: inline-block;
+  width: 48px;
+  height: 26px;
+}
+
+.switch-modern input { opacity: 0; width: 0; height: 0; }
+
+.switch-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: #dee2e6;
+  transition: .3s;
+  border-radius: 34px;
+}
+
+.switch-slider:before {
+  position: absolute;
+  content: "";
+  height: 20px; width: 20px;
+  left: 3px; bottom: 3px;
+  background-color: white;
+  transition: .3s;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+input:checked + .switch-slider {
+  background-color: var(--primary);
+}
+
+input:checked + .switch-slider:before {
+  transform: translateX(22px);
+}
+
+/* Whitelist Styles */
+.whitelist-list { list-style: none; }
+.whitelist-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-color);
+}
+.whitelist-item:last-child { border-bottom: none; }
+
+.empty-placeholder {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+}
+
+.empty-placeholder svg {
+  width: 48px; height: 48px;
+  margin-bottom: 16px;
+  opacity: 0.2;
+}
+
+/* About Card */
+.about-card {
+  text-align: center;
+  padding: 40px;
+}
+.about-hero .about-logo {
+  font-size: 64px;
+  margin-bottom: 16px;
+}
+.about-hero h3 { font-size: 24px; margin-bottom: 4px; }
+.divider { margin: 32px 0; border: none; border-top: 1px solid var(--border-color); }
+.links { display: flex; justify-content: center; gap: 24px; margin-top: 16px; }
+.links a { color: var(--primary); text-decoration: none; font-weight: 600; font-size: 14px; }
+.links a:hover { text-decoration: underline; }
+
+/* Discord Button */
+.btn-discord {
+  display: inline-block;
+  background-color: #5865F2; /* Discord Blurple */
+  color: white;
+  text-decoration: none;
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  transition: var(--transition);
+  box-shadow: 0 4px 15px rgba(88, 101, 242, 0.2);
+}
+
+.btn-discord:hover {
+  background-color: #4752c4;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(88, 101, 242, 0.3);
+}
